@@ -37,6 +37,12 @@ az containerapp up --name <your-containerapp> --resource-group <your-rg> --sourc
 ### 5) Configure backend settings
 Set **App Settings** (environment variables) on the Container App.
 
+### 6) Set up the Excel workbook
+This repo includes a sanitized starter workbook you can upload to OneDrive/SharePoint:
+- `excel-templates/SAP_Order_Simulator_TEMPLATE.xlsx`
+
+Or you can create your own workbook and tables using the CSV/TSV templates in `excel-templates/`.
+
 Minimum for Graph workbook lookup/update:
 - `BACKEND_MODE=graph`
 - `GRAPH_TENANT_ID`, `GRAPH_CLIENT_ID`, `GRAPH_CLIENT_SECRET`
