@@ -93,14 +93,22 @@ Behavior:
 
 ## Shipment tracking (carrier + SAP events -> predicted delay -> proactive notification)
 
-### Workbook tables
-Add these tables to the same workbook used by `Orders`/`OrderLines`:
+### Use the unified workbook template (recommended)
+If you want the simplest setup path, upload the all-up workbook template to OneDrive/SharePoint and point Graph at it:
+- `excel-templates/SAP_Order_Simulator_TEMPLATE.xlsx`
+
+This workbook already includes the required tables (including `Shipments` and `ShipmentEvents`).
+
+### Advanced: table schema / customization
+If you need to customize columns, see [EXCEL_SHIPMENT_TABLES.md](../EXCEL_SHIPMENT_TABLES.md) for the recommended schema and examples.
+
+The backend expects tables named:
 - `Shipments` (override with `GRAPH_TABLE_SHIPMENTS`)
 - `ShipmentEvents` (override with `GRAPH_TABLE_SHIPMENTEVENTS`)
 
-See [EXCEL_SHIPMENT_TABLES.md](../EXCEL_SHIPMENT_TABLES.md) for the recommended columns and examples.
+### Advanced: provision tables automatically
+If you are using your own workbook (not the template) and need to create the shipment tables, you can provision them via Graph.
 
-### Provision tables automatically (recommended)
 If your workbook is stored in SharePoint/OneDrive, you generally **can’t** use a sharing URL from a script without authenticating.
 Instead, provision tables using Microsoft Graph with the same `GRAPH_*` credentials you already configure for the backend.
 
@@ -119,9 +127,6 @@ This script:
 - creates worksheets (if missing)
 - creates Excel tables named `Shipments` and `ShipmentEvents` (or your configured overrides)
 - optionally loads sample rows (if enabled in the script)
-
-If you want a ready-to-use workbook (with tables + sanitized sample data) instead of provisioning tables, use:
-- `excel-templates/SAP_Order_Simulator_TEMPLATE.xlsx`
 
 If you need to recreate tables, run:
 ```powershell

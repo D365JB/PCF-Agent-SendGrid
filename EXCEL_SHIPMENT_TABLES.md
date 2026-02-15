@@ -1,5 +1,10 @@
 # Excel shipment tracking tables (Graph workbook)
 
+If you are using the unified template workbook, you do **not** need to create these tables manually:
+- `excel-templates/SAP_Order_Simulator_TEMPLATE.xlsx`
+
+This document is primarily for **reference/customization** (e.g., adding/removing columns or provisioning the tables in an existing workbook).
+
 This project’s backend (AzureProxyWebApp) reads Excel **tables** from a workbook via Microsoft Graph.
 To support:
 - carrier events / tracking milestones

@@ -56,4 +56,5 @@ For email sending:
 - See [AzureProxyWebApp/README.md](AzureProxyWebApp/README.md) for full backend details.
 - See [TEAM_QUICKSTART.md](TEAM_QUICKSTART.md) for a short runbook.
 - See [TEAM_REPLICATION_RUNBOOK.md](TEAM_REPLICATION_RUNBOOK.md) for deeper setup.
-- See [EXCEL_SHIPMENT_TABLES.md](EXCEL_SHIPMENT_TABLES.md) for the shipment tracking workbook table schema.
+- See [excel-templates/README.md](excel-templates/README.md) for the all-up Excel workbook template (`SAP_Order_Simulator_TEMPLATE.xlsx`).
+- Optional: See [EXCEL_SHIPMENT_TABLES.md](EXCEL_SHIPMENT_TABLES.md) for the shipment table schema (already included in the template workbook).
