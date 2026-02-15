@@ -1,0 +1,36 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+
+# generated directory
+**/generated
+
+# output directory
+/out
+
+# msbuild output directories
+/bin
+/obj
+
+# MSBuild Binary and Structured Log
+*.binlog
+*.log
+
+# Visual Studio cache/options directory
+/.vs
+
+# local environment / secrets
+.env
+.env.*
+
+# Azure tooling local env files
+**/.azure-*.env
+
+# local temp artifacts
+/build-output.log
+/tmp-sharepoint.xlsx
+/AzureProxyFunction/deploy-func.zip
+
+# macos
+.DS_Store

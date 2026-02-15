@@ -1,0 +1,12 @@
+{
+  "IsEncrypted": false,
+  "Values": {
+    "AzureWebJobsStorage": "UseDevelopmentStorage=true",
+    "FUNCTIONS_WORKER_RUNTIME": "node",
+    "COPILOT_UPSTREAM_URL": "https://example-upstream-endpoint",
+    "COPILOT_UPSTREAM_API_KEY": "",
+    "ALLOWED_ORIGINS": "https://apps.powerapps.com",
+    "REQUIRE_SHARED_SECRET": "false",
+    "PROXY_SHARED_SECRET": ""
+  }
+}

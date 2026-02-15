@@ -1,0 +1,4 @@
+PCFCopilot_DisplayName=Copilot Chat Control
+PCFCopilot_Description=A PCF control for Dynamics that integrates Copilot chat interface.
+PCFCopilot_ApiKey_DisplayName=Copilot API Key
+PCFCopilot_ApiKey_Description=API key for Copilot integration
