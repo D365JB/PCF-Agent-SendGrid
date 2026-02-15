@@ -118,7 +118,10 @@ The script will resolve `driveId`/`itemId` automatically via Graph.
 This script:
 - creates worksheets (if missing)
 - creates Excel tables named `Shipments` and `ShipmentEvents` (or your configured overrides)
-- loads starter rows from `excel-templates/*.tsv`
+- optionally loads sample rows (if enabled in the script)
+
+If you want a ready-to-use workbook (with tables + sanitized sample data) instead of provisioning tables, use:
+- `excel-templates/SAP_Order_Simulator_TEMPLATE.xlsx`
 
 If you need to recreate tables, run:
 ```powershell

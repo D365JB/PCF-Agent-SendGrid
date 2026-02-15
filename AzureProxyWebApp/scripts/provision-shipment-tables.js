@@ -18,9 +18,6 @@
     node scripts/provision-shipment-tables.js
 */
 
-const fs = require("fs");
-const path = require("path");
-
 function requiredEnv(name) {
   const value = String(process.env[name] || "").trim();
   if (!value) {
@@ -34,14 +31,13 @@ function optionalEnv(name, defaultValue) {
   return value || defaultValue;
 }
 
+function optionalEnvRaw(name) {
+  return String(process.env[name] || "").trim();
+}
+
 function isTruthy(value) {
   const raw = String(value || "").trim().toLowerCase();
   return raw === "true" || raw === "1" || raw === "yes" || raw === "y";
-}
-
-function optionalEnvRaw(name) {
-  const value = String(process.env[name] || "").trim();
-  return value;
 }
 
 function toBase64Url(input) {
@@ -53,12 +49,10 @@ function toBase64Url(input) {
 }
 
 function buildShareIdFromUrl(shareUrl) {
-  // Graph format: u!{base64url(shareUrl)}
   return `u!${toBase64Url(shareUrl)}`;
 }
 
 function toColumnLetter(index1Based) {
-  // 1 -> A, 26 -> Z, 27 -> AA
   let n = index1Based;
   let result = "";
   while (n > 0) {
@@ -69,24 +63,98 @@ function toColumnLetter(index1Based) {
   return result;
 }
 
-function parseTsv(tsvText) {
-  const lines = String(tsvText || "")
-    .split(/\r?\n/)
-    .map((l) => l.trimEnd())
-    .filter((l) => l.trim() !== "");
+function getEmbeddedTemplate(tableKind) {
+  if (tableKind === "shipments") {
+    const headers = [
+      "ShipmentId",
+      "OrderNumber",
+      "Mode",
+      "Carrier",
+      "TrackingNumber",
+      "PlannedShipDate",
+      "PlannedDeliveryDate",
+      "SAPShipmentId",
+      "Origin",
+      "Destination",
+      "CustomerEmailOverride",
+      "LastEvaluatedAt",
+      "PredictedDeliveryDate",
+      "PredictedDelayHours",
+      "IsRunningLate",
+      "LastMilestoneCode",
+      "LastMilestoneAt",
+    ];
 
-  if (lines.length === 0) return { headers: [], rows: [] };
+    const sampleRows = [
+      [
+        "SHP-6600000680-01",
+        "6600000680",
+        "parcel",
+        "UPS",
+        "1Z999AA10123456784",
+        "2026-02-15T08:00:00Z",
+        "2026-02-22T17:00:00Z",
+        "80001234",
+        "Dallas",
+        "Redmond",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+        "",
+      ],
+    ];
 
-  const headers = lines[0].split("\t").map((h) => h.trim());
-  const rows = lines
-    .slice(1)
-    .map((line) => line.split("\t"))
-    .map((cells) => {
-      const normalized = headers.map((_, idx) => (cells[idx] === undefined ? "" : String(cells[idx]).trim()));
-      return normalized;
-    });
+    return { headers, sampleRows };
+  }
 
-  return { headers, rows };
+  if (tableKind === "shipmentevents") {
+    const headers = [
+      "ShipmentId",
+      "TrackingNumber",
+      "Source",
+      "EventTime",
+      "EventCode",
+      "Status",
+      "EventDescription",
+      "Location",
+      "EstimatedDeliveryDate",
+      "Mode",
+    ];
+
+    const sampleRows = [
+      [
+        "SHP-6600000680-01",
+        "1Z999AA10123456784",
+        "Carrier",
+        "2026-02-15T10:15:00Z",
+        "PU",
+        "Picked up",
+        "Picked up by carrier",
+        "Dallas",
+        "2026-02-22T17:00:00Z",
+        "parcel",
+      ],
+      [
+        "SHP-6600000680-01",
+        "1Z999AA10123456784",
+        "Carrier",
+        "2026-02-16T03:40:00Z",
+        "IT",
+        "In transit",
+        "Departed facility",
+        "Dallas",
+        "2026-02-22T17:00:00Z",
+        "parcel",
+      ],
+    ];
+
+    return { headers, sampleRows };
+  }
+
+  throw new Error(`Unknown table kind: ${tableKind}`);
 }
 
 async function getGraphToken() {
@@ -149,11 +217,8 @@ async function ensureWorksheet(token, driveId, itemId, worksheetName) {
   try {
     await graphRequest(token, "GET", `/drives/${encodedDrive}/items/${encodedItem}/workbook/worksheets/${encodedWs}`, null);
     return;
-  } catch (e) {
-    // create
-    await graphRequest(token, "POST", `/drives/${encodedDrive}/items/${encodedItem}/workbook/worksheets/add`, {
-      name: worksheetName,
-    });
+  } catch {
+    await graphRequest(token, "POST", `/drives/${encodedDrive}/items/${encodedItem}/workbook/worksheets/add`, { name: worksheetName });
   }
 }
 
@@ -201,7 +266,7 @@ async function setRangeValues(token, driveId, itemId, worksheetName, address, va
     token,
     "PATCH",
     `/drives/${encodedDrive}/items/${encodedItem}/workbook/worksheets/${encodedWs}/range(address='${encodedAddress}')`,
-    { values: values2d }
+    { values: values2d },
   );
 }
 
@@ -211,12 +276,11 @@ async function getWorksheetUsedRange(token, driveId, itemId, worksheetName) {
   const encodedWs = encodeURIComponent(worksheetName);
 
   try {
-    // valuesOnly avoids returning full formulas/styles; we just need dimensions.
     return await graphRequest(
       token,
       "GET",
       `/drives/${encodedDrive}/items/${encodedItem}/workbook/worksheets/${encodedWs}/usedRange(valuesOnly=true)`,
-      null
+      null,
     );
   } catch {
     return null;
@@ -224,7 +288,6 @@ async function getWorksheetUsedRange(token, driveId, itemId, worksheetName) {
 }
 
 function safeStartRowFromUsedRange(usedRange) {
-  // Graph returns rowCount/columnCount; start 2 rows below to avoid overlap.
   const rowCount = Number(usedRange?.rowCount || 0);
   if (!Number.isFinite(rowCount) || rowCount <= 0) return 1;
   return rowCount + 2;
@@ -235,12 +298,11 @@ async function addTable(token, driveId, itemId, worksheetName, address) {
   const encodedItem = encodeURIComponent(itemId);
   const encodedWs = encodeURIComponent(worksheetName);
 
-  // address is relative to worksheet (e.g., A1:J10)
   return graphRequest(
     token,
     "POST",
     `/drives/${encodedDrive}/items/${encodedItem}/workbook/worksheets/${encodedWs}/tables/add`,
-    { address, hasHeaders: true }
+    { address, hasHeaders: true },
   );
 }
 
@@ -257,17 +319,20 @@ async function addTableRows(token, driveId, itemId, tableName, rows2d) {
   const encodedDrive = encodeURIComponent(driveId);
   const encodedItem = encodeURIComponent(itemId);
   const encodedTable = encodeURIComponent(tableName);
-
   await graphRequest(token, "POST", `/drives/${encodedDrive}/items/${encodedItem}/workbook/tables/${encodedTable}/rows/add`, {
     values: rows2d,
   });
 }
 
-async function provisionTable({ token, driveId, itemId, tableName, worksheetName, tsvPath }) {
+async function provisionTable({ token, driveId, itemId, tableName, worksheetName, headers, sampleRows }) {
   const force = String(process.env.PROVISION_FORCE || "").trim().toLowerCase() === "true";
   const includeSampleData = !String(process.env.PROVISION_SAMPLE_DATA || "").trim()
     ? true
     : isTruthy(process.env.PROVISION_SAMPLE_DATA);
+
+  if (!Array.isArray(headers) || headers.length === 0) {
+    throw new Error("Missing headers for table provisioning.");
+  }
 
   await ensureWorksheet(token, driveId, itemId, worksheetName);
 
@@ -284,14 +349,7 @@ async function provisionTable({ token, driveId, itemId, tableName, worksheetName
     await deleteTable(token, driveId, itemId, existing.id);
   }
 
-  const tsvText = fs.readFileSync(tsvPath, "utf8");
-  const { headers, rows } = parseTsv(tsvText);
-
-  if (headers.length === 0) {
-    throw new Error(`No headers found in TSV: ${tsvPath}`);
-  }
-
-  const effectiveRows = includeSampleData ? rows : [];
+  const effectiveRows = includeSampleData && Array.isArray(sampleRows) ? sampleRows : [];
   const totalRows = 1 + effectiveRows.length;
   const totalCols = headers.length;
 
@@ -302,27 +360,21 @@ async function provisionTable({ token, driveId, itemId, tableName, worksheetName
   const address = `A${startRow}:${endCol}${endRow}`;
 
   console.log(`Writing sheet '${worksheetName}' range ${address} for table '${tableName}'...`);
-  const values = [headers, ...effectiveRows];
-  await setRangeValues(token, driveId, itemId, worksheetName, address, values);
+  await setRangeValues(token, driveId, itemId, worksheetName, address, [headers, ...effectiveRows]);
 
   console.log(`Creating table '${tableName}'...`);
   const created = await addTable(token, driveId, itemId, worksheetName, address);
   const tableId = created && created.id ? created.id : null;
-
   if (tableId) {
     await renameTable(token, driveId, itemId, tableId, tableName);
   }
 
-  // Graph sometimes keeps the data but doesn't attach rows when table is created from range.
-  // Ensure rows are present by adding them if table is empty.
-  // We only do this when force-recreating (to avoid duplicates), or when it was missing.
-  if (!existing || force) {
-    if (includeSampleData && effectiveRows.length > 0) {
-      try {
-        await addTableRows(token, driveId, itemId, tableName, effectiveRows);
-      } catch {
-        // best-effort; range already contains them
-      }
+  // Best-effort: if Graph didn't attach rows when creating from range, add them directly.
+  if ((!existing || force) && includeSampleData && effectiveRows.length > 0) {
+    try {
+      await addTableRows(token, driveId, itemId, tableName, effectiveRows);
+    } catch {
+      // Ignore; range already contained them.
     }
   }
 
@@ -337,13 +389,8 @@ async function main() {
   const shipmentsTable = optionalEnv("GRAPH_TABLE_SHIPMENTS", "Shipments");
   const eventsTable = optionalEnv("GRAPH_TABLE_SHIPMENTEVENTS", "ShipmentEvents");
 
-  const repoRoot = path.resolve(__dirname, "..", "..");
-  const shipmentsTsv = path.join(repoRoot, "excel-templates", "Shipments.tsv");
-  const eventsTsv = path.join(repoRoot, "excel-templates", "ShipmentEvents.tsv");
-
-  if (!fs.existsSync(shipmentsTsv) || !fs.existsSync(eventsTsv)) {
-    throw new Error("Missing TSV templates under excel-templates/. Ensure Shipments.tsv and ShipmentEvents.tsv exist.");
-  }
+  const shipmentsTemplate = getEmbeddedTemplate("shipments");
+  const eventsTemplate = getEmbeddedTemplate("shipmentevents");
 
   console.log("Authenticating to Microsoft Graph...");
   const token = await getGraphToken();
@@ -367,7 +414,8 @@ async function main() {
     itemId,
     tableName: shipmentsTable,
     worksheetName: shipmentsTable,
-    tsvPath: shipmentsTsv,
+    headers: shipmentsTemplate.headers,
+    sampleRows: shipmentsTemplate.sampleRows,
   });
 
   await provisionTable({
@@ -376,7 +424,8 @@ async function main() {
     itemId,
     tableName: eventsTable,
     worksheetName: eventsTable,
-    tsvPath: eventsTsv,
+    headers: eventsTemplate.headers,
+    sampleRows: eventsTemplate.sampleRows,
   });
 
   console.log("Done.");
