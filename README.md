@@ -41,7 +41,7 @@ Set **App Settings** (environment variables) on the Container App.
 This repo includes a sanitized starter workbook you can upload to OneDrive/SharePoint:
 - `excel-templates/SAP_Order_Simulator_TEMPLATE.xlsx`
 
-Or you can create your own workbook and tables using the CSV/TSV templates in `excel-templates/`.
+If you need to regenerate the template workbook, see `excel-templates/generate_workbook_template.py`.
 
 Minimum for Graph workbook lookup/update:
 - `BACKEND_MODE=graph`
