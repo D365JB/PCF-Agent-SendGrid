@@ -1,3 +1,13 @@
+try {
+  // Optional local development helper (kept out of git via .gitignore)
+  // Supports DOTENV_CONFIG_PATH to point at a non-default env file.
+  require("dotenv").config({
+    path: (process.env.DOTENV_CONFIG_PATH || "").trim() || undefined,
+  });
+} catch {
+  // dotenv is optional at runtime (e.g. in certain hosted environments)
+}
+
 const express = require("express");
 
 const app = express();
@@ -46,6 +56,56 @@ function resolveUpstreamUrl(action) {
 }
 
 function normalizeTable(input) {
+  const hasSkuLikeToken = /\b[A-Za-z0-9]+-[A-Za-z0-9][A-Za-z0-9-]*\b/.test(input);
+  const asksWhereToGet =
+    input.includes("where can i get") ||
+    input.includes("where do i get") ||
+    input.includes("where to get") ||
+    input.includes("which location has") ||
+    input.includes("which dc has") ||
+    input.includes("which distribution center has");
+
+  if (
+    asksWhereToGet &&
+    !input.includes("order") &&
+    !input.includes("shipment") &&
+    (input.includes("inventory") || input.includes("sku") || input.includes("product") || hasSkuLikeToken)
+  ) {
+    return "inventory";
+  }
+
+  if (
+    (input.includes("availability") || input.includes("available")) &&
+    !input.includes("order") &&
+    (input.includes("inventory") || input.includes("sku") || input.includes("product") || hasSkuLikeToken)
+  ) {
+    return "inventory";
+  }
+
+  if (
+    input.includes("inventory") ||
+    input.includes("on hand") ||
+    input.includes("onhand") ||
+    input.includes("available qty") ||
+    input.includes("availableqty") ||
+    input.includes("stock") ||
+    input.includes("atp")
+  ) {
+    return "inventory";
+  }
+  if (input.includes("allocations") || input.includes("allocation") || input.includes("allocated") || input.includes("promise date")) {
+    return "orderallocations";
+  }
+  if (
+    input.includes("locations") ||
+    input.includes("location ") ||
+    input.includes(" dc") ||
+    input.includes("distribution center") ||
+    input.includes("3pl") ||
+    input.includes("plant")
+  ) {
+    return "locations";
+  }
   if (input.includes("orderlines") || input.includes("order lines") || input.includes("line ")) {
     return "orderlines";
   }
@@ -169,6 +229,35 @@ function toCanonicalKey(table, tokenMap) {
     return sku ? { SKU: sku } : {};
   }
 
+  if (table === "inventory") {
+    const inventoryId = map.inventoryid || map.inventory;
+    const sku = map.sku || map.product;
+    const locationId = map.locationid || map.location;
+    const key = {};
+    if (inventoryId) key.InventoryId = inventoryId;
+    if (sku) key.SKU = sku;
+    if (locationId) key.LocationId = locationId;
+    return key;
+  }
+
+  if (table === "locations") {
+    const locationId = map.locationid || map.location;
+    const name = map.name;
+    if (locationId) return { LocationId: locationId };
+    if (name) return { Name: name };
+    return {};
+  }
+
+  if (table === "orderallocations") {
+    const allocationId = map.allocationid;
+    const orderNumber = map.ordernumber || map.order;
+    const lineNumber = map.linenumber || map.line;
+    if (allocationId) return { AllocationId: allocationId };
+    if (orderNumber && lineNumber) return { OrderNumber: orderNumber, LineNumber: lineNumber };
+    if (orderNumber) return { OrderNumber: orderNumber };
+    return {};
+  }
+
   return {};
 }
 
@@ -215,8 +304,31 @@ function toCanonicalUpdates(table, tokenMap, input) {
 function parseAgentIntent(input) {
   const lowered = input.toLowerCase();
   const action = normalizeAction(lowered);
-  const table = normalizeTable(lowered);
+  let table = normalizeTable(lowered);
   const tokens = parseKeyValueTokens(input);
+
+  // Heuristic override: prompts like "availability for <SKU>" or "where can I get <SKU>" should
+  // route to inventory lookups even if the message doesn't contain the word "inventory".
+  if (table === "orders" && !tokens.ordernumber && !tokens.order) {
+    const skuGuess = detectSkuFromText(input);
+    const looksInventoryLike =
+      lowered.includes("availability") ||
+      lowered.includes("available") ||
+      lowered.includes("on hand") ||
+      lowered.includes("onhand") ||
+      lowered.includes("stock") ||
+      lowered.includes("atp") ||
+      lowered.includes("where can i get") ||
+      lowered.includes("where do i get") ||
+      lowered.includes("where to get") ||
+      lowered.includes("which location has") ||
+      lowered.includes("which dc has");
+
+    if (skuGuess && looksInventoryLike) {
+      table = "inventory";
+      tokens.sku = tokens.sku || tokens.product || skuGuess;
+    }
+  }
 
   if (table === "orders" && !tokens.ordernumber && !tokens.order) {
     const match = input.match(/\border\s*(?:number|no\.?|#)?\s*[:=]?\s*([A-Za-z0-9-]+)/i);
@@ -237,6 +349,57 @@ function parseAgentIntent(input) {
     const match = input.match(/\b(?:sku|product)\s*(?:id|#)?\s*[:=]?\s*([A-Za-z0-9-]+)/i);
     if (match?.[1]) {
       tokens.sku = match[1];
+    }
+  }
+
+  if (table === "inventory" && !tokens.sku && !tokens.product) {
+    // Accept: "inventory for MIL-INV-1002" (no explicit SKU keyword)
+    // Also accept: "inventory availability for MIL-INV-1002"
+    const explicit = input.match(/\b(?:sku|product)\s*(?:id|#)?\s*[:=]?\s*([A-Za-z0-9-]+)/i);
+    if (explicit?.[1]) {
+      if (/^mil-inv-\d+$/i.test(explicit[1])) {
+        tokens.inventoryid = explicit[1];
+      } else {
+        tokens.sku = explicit[1];
+      }
+    } else {
+      // Avoid capturing key-value tokens like "inventoryid=..." as the SKU.
+      const implicit = input.match(/\binventory\b(?:\s+availability|\s+available)?(?:\s+for)?\s+([A-Za-z0-9][A-Za-z0-9-]{1,})\b(?!\s*=)/i);
+      if (implicit?.[1]) {
+        const captured = String(implicit[1] || "").trim();
+        const capturedNorm = captured.toLowerCase();
+        const stopWords = new Set(["inventoryid", "inventory", "location", "locations", "available", "availability", "for", "at", "in"]);
+        if (!stopWords.has(capturedNorm)) {
+          if (/^mil-inv-\d+$/i.test(captured)) {
+            tokens.inventoryid = captured;
+          } else {
+            tokens.sku = captured;
+          }
+        }
+      }
+    }
+
+    if (!tokens.sku && !tokens.product) {
+      const skuGuess = detectSkuFromText(input);
+      if (skuGuess) tokens.sku = skuGuess;
+    }
+  }
+
+  if (table === "inventory" && !tokens.inventoryid && !tokens.inventory) {
+    const invId = detectInventoryIdFromText(input);
+    if (invId) {
+      tokens.inventoryid = invId;
+      // If we accidentally captured InventoryId into sku earlier, clear it.
+      if (tokens.sku && normalizeValue(tokens.sku) === normalizeValue(invId)) {
+        delete tokens.sku;
+      }
+    }
+  }
+
+  if (table === "locations" && !tokens.locationid && !tokens.location) {
+    const match = input.match(/\blocation\b\s*(?:id|#)?\s*[:=]?\s*([A-Za-z0-9-]+)/i);
+    if (match?.[1]) {
+      tokens.locationid = match[1];
     }
   }
 
@@ -385,8 +548,42 @@ function getTableName(table) {
     products: process.env.GRAPH_TABLE_PRODUCTS || "Products",
     shipments: process.env.GRAPH_TABLE_SHIPMENTS || "Shipments",
     shipmentevents: process.env.GRAPH_TABLE_SHIPMENTEVENTS || "ShipmentEvents",
+    locations: process.env.GRAPH_TABLE_LOCATIONS || "Locations",
+    inventory: process.env.GRAPH_TABLE_INVENTORY || "Inventory",
+    orderallocations: process.env.GRAPH_TABLE_ORDERALLOCATIONS || "OrderAllocations",
   };
   return map[table] || map.orders;
+}
+
+const graphWorksheetTableIdCache = new Map();
+
+function getWorksheetTableCacheKey(worksheetName) {
+  const driveId = process.env.GRAPH_DRIVE_ID || "";
+  const itemId = process.env.GRAPH_ITEM_ID || "";
+  return `${driveId}|${itemId}|${worksheetName}`;
+}
+
+async function resolveTableIdFromWorksheet({ driveId, itemId, worksheetName }) {
+  const cacheKey = getWorksheetTableCacheKey(worksheetName);
+  const cached = graphWorksheetTableIdCache.get(cacheKey);
+  if (cached) return cached;
+
+  const encodedWs = encodeURIComponent(worksheetName);
+  const path = `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/workbook/worksheets/${encodedWs}/tables?$top=50`;
+  const resp = await graphRequest(path);
+  const tables = Array.isArray(resp.value) ? resp.value : [];
+  const first = tables[0] || null;
+  const tableId = first && first.id ? String(first.id) : "";
+  if (!tableId) {
+    throw new Error(`No Excel tables found on worksheet '${worksheetName}'.`);
+  }
+
+  graphWorksheetTableIdCache.set(cacheKey, tableId);
+  return tableId;
+}
+
+function isGraphNotFoundErrorMessage(message) {
+  return /ItemNotFound|Resource not found|not found|InvalidArgument/i.test(String(message || ""));
 }
 
 function normalizeValue(value) {
@@ -528,10 +725,29 @@ async function getTableData(table, cache) {
   const encodedTable = encodeURIComponent(tableName);
   const base = `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/workbook/tables/${encodedTable}`;
 
-  const [columnsResp, rowsResp] = await Promise.all([
-    graphRequest(`${base}/columns?$top=300`),
-    graphRequest(`${base}/rows?$top=2000`),
-  ]);
+  let columnsResp;
+  let rowsResp;
+  try {
+    [columnsResp, rowsResp] = await Promise.all([
+      graphRequest(`${base}/columns?$top=300`),
+      graphRequest(`${base}/rows?$top=2000`),
+    ]);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Common case in Excel Online: the worksheet exists but the Table name is auto-generated (Table7/Table8/etc).
+    // If the configured name matches a worksheet name, fall back to resolving the first table on that worksheet.
+    if (isGraphNotFoundErrorMessage(message)) {
+      const resolvedId = await resolveTableIdFromWorksheet({ driveId, itemId, worksheetName: tableName });
+      const encodedResolved = encodeURIComponent(resolvedId);
+      const resolvedBase = `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/workbook/tables/${encodedResolved}`;
+      [columnsResp, rowsResp] = await Promise.all([
+        graphRequest(`${resolvedBase}/columns?$top=300`),
+        graphRequest(`${resolvedBase}/rows?$top=2000`),
+      ]);
+    } else {
+      throw error;
+    }
+  }
 
   const headers = (columnsResp.value || []).map((c) => c.name);
   const rows = (rowsResp.value || []).map((row) => {
@@ -658,6 +874,40 @@ function detectOrderNumberFromText(input) {
   return match ? match[0] : "";
 }
 
+function detectSkuFromText(input) {
+  const text = String(input || "");
+  if (!text.trim()) return "";
+
+  // Prefer explicit markers when present.
+  const explicit = text.match(/\b(?:sku|product)\s*(?:id|#)?\s*[:=]?\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b/i);
+  if (explicit?.[1]) return explicit[1];
+
+  // Common hyphenated SKU/material formats: MIL-INV-1002, SKU-00029, ABC-123
+  const hyphenated = text.match(/\b([A-Za-z][A-Za-z0-9]*-[A-Za-z0-9][A-Za-z0-9-]*)\b/);
+  if (hyphenated?.[1]) {
+    // In this workbook template, MIL-INV-#### is an InventoryId, not a SKU.
+    if (/^mil-inv-\d+$/i.test(hyphenated[1])) return "";
+    return hyphenated[1];
+  }
+
+  return "";
+}
+
+function detectInventoryIdFromText(input) {
+  const text = String(input || "");
+  if (!text.trim()) return "";
+
+  // Explicit key-value form: inventoryid=MIL-INV-1002
+  const explicit = text.match(/\binventoryid\s*[:=]?\s*([A-Za-z0-9][A-Za-z0-9-]{1,})\b/i);
+  if (explicit?.[1]) return explicit[1];
+
+  // Common demo format: MIL-INV-1002
+  const inv = text.match(/\b(MIL-INV-\d{3,})\b/i);
+  if (inv?.[1]) return inv[1];
+
+  return "";
+}
+
 function getLateThresholdHours() {
   const raw = Number(process.env.LATE_THRESHOLD_HOURS || 24);
   if (!Number.isFinite(raw) || raw <= 0) return 24;
@@ -769,11 +1019,29 @@ async function tryGetTableData(table, cache) {
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     // Common case: workbook exists but table doesn't (yet). Treat as "optional".
-    if (/ItemNotFound|Resource not found|not found|InvalidArgument/i.test(message)) {
+    if (isGraphNotFoundErrorMessage(message)) {
       return null;
     }
     throw error;
   }
+}
+
+function toNumber(value) {
+  if (value === null || value === undefined || value === "") return 0;
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  const cleaned = String(value).trim();
+  if (!cleaned) return 0;
+  const n = Number(cleaned);
+  return Number.isFinite(n) ? n : 0;
+}
+
+async function getInventoryLocationTables(cache) {
+  const [locationsData, inventoryData, allocationsData] = await Promise.all([
+    tryGetTableData("locations", cache),
+    tryGetTableData("inventory", cache),
+    tryGetTableData("orderallocations", cache),
+  ]);
+  return { locationsData, inventoryData, allocationsData };
 }
 
 function computeShipmentPrediction({ plannedDeliveryMs, events, shipmentMode }) {
@@ -913,6 +1181,148 @@ async function shipmentPipelineGraph(intent) {
 async function lookupGraph(intent) {
   const cache = {};
   const table = intent.table || "orders";
+
+  if (table === "inventory") {
+    const inventoryTables = await getInventoryLocationTables(cache);
+    const inventoryData = inventoryTables.inventoryData;
+    const locationsData = inventoryTables.locationsData;
+
+    if (!inventoryData) {
+      return {
+        success: false,
+        action: "lookup",
+        table: "inventory",
+        result: "Inventory table is not configured in the workbook yet. Add an Inventory table.",
+        missingTables: [getTableName("inventory")],
+      };
+    }
+
+    const requestedInventoryId =
+      String(intent.key?.InventoryId || intent.key?.inventoryId || "").trim() ||
+      detectInventoryIdFromText(intent.query);
+
+    const sku =
+      String(intent.key?.SKU || intent.key?.sku || "").trim() ||
+      String(intent.key?.Product || intent.key?.product || "").trim() ||
+      detectSkuFromText(intent.query);
+
+    const requestedLocationId = String(intent.key?.LocationId || intent.key?.locationId || "").trim();
+    const invIdNorm = normalizeValue(requestedInventoryId);
+    const skuNorm = normalizeValue(sku);
+    const locationNorm = normalizeValue(requestedLocationId);
+
+    let invMatches = (inventoryData.rows || []).filter((row) => {
+      if (invIdNorm) {
+        const rowInvId = normalizeValue(getRowFieldInsensitive(row, "InventoryId"));
+        if (!rowInvId) return false;
+        if (rowInvId !== invIdNorm) return false;
+      }
+
+      if (skuNorm) {
+        const rowSku = normalizeValue(getRowFieldInsensitive(row, "SKU"));
+        if (!rowSku) return false;
+        if (rowSku !== skuNorm) return false;
+      }
+
+      if (locationNorm) {
+        const rowLoc = normalizeValue(getRowFieldInsensitive(row, "LocationId"));
+        if (!rowLoc) return false;
+        if (rowLoc !== locationNorm) return false;
+      }
+
+      return true;
+    });
+
+    // If SKU was inferred but exact match fails, try a contains match (helps with formatting differences).
+    if (invMatches.length === 0 && skuNorm && !invIdNorm) {
+      invMatches = (inventoryData.rows || []).filter((row) => {
+        const rowSku = normalizeValue(getRowFieldInsensitive(row, "SKU"));
+        return rowSku && rowSku.includes(skuNorm);
+      });
+    }
+
+    // If there was no SKU, fall back to a generic query scan (e.g. "inventory at DC-01").
+    if (invMatches.length === 0 && !skuNorm) {
+      invMatches = (inventoryData.rows || []).filter((row) => rowHasQuery(row, intent.query));
+    }
+
+    const locationTotals = new Map();
+    for (const row of invMatches) {
+      const locationId = String(getRowFieldInsensitive(row, "LocationId") || "").trim();
+      if (!locationId) continue;
+      const existing = locationTotals.get(locationId) || { LocationId: locationId, OnHandQty: 0, ReservedQty: 0, AvailableQty: 0, InboundQty: 0 };
+      existing.OnHandQty += toNumber(getRowFieldInsensitive(row, "OnHandQty"));
+      existing.ReservedQty += toNumber(getRowFieldInsensitive(row, "ReservedQty"));
+      existing.AvailableQty += toNumber(getRowFieldInsensitive(row, "AvailableQty"));
+      existing.InboundQty += toNumber(getRowFieldInsensitive(row, "InboundQty"));
+      locationTotals.set(locationId, existing);
+    }
+
+    const locationIds = new Set(Array.from(locationTotals.keys()).map((v) => normalizeValue(v)).filter(Boolean));
+    const matchedLocations = locationsData
+      ? (locationsData.rows || [])
+          .filter((row) => {
+            const id = normalizeValue(getRowFieldInsensitive(row, "LocationId"));
+            return id && locationIds.has(id);
+          })
+          .map(stripRowMeta)
+      : [];
+
+    const locationNameById = new Map(
+      matchedLocations.map((l) => [String(getRowFieldInsensitive(l, "LocationId") || "").trim(), String(getRowFieldInsensitive(l, "Name") || getRowFieldInsensitive(l, "LocationName") || "").trim()])
+    );
+
+    const whereToGet = Array.from(locationTotals.values())
+      .map((t) => ({
+        ...t,
+        LocationName: locationNameById.get(t.LocationId) || "",
+      }))
+      .filter((t) => t.AvailableQty > 0)
+      .sort((a, b) => b.AvailableQty - a.AvailableQty);
+
+    const summaryKeyLabel = requestedInventoryId ? `InventoryId ${requestedInventoryId}` : (sku ? sku : "");
+
+    const skuTotals = (sku || requestedInventoryId)
+      ? [
+          {
+            SKU: sku || "",
+            InventoryId: requestedInventoryId || "",
+            OnHandQty: invMatches.reduce((sum, r) => sum + toNumber(getRowFieldInsensitive(r, "OnHandQty")), 0),
+            ReservedQty: invMatches.reduce((sum, r) => sum + toNumber(getRowFieldInsensitive(r, "ReservedQty")), 0),
+            AvailableQty: invMatches.reduce((sum, r) => sum + toNumber(getRowFieldInsensitive(r, "AvailableQty")), 0),
+            InboundQty: invMatches.reduce((sum, r) => sum + toNumber(getRowFieldInsensitive(r, "InboundQty")), 0),
+            Locations: locationTotals.size,
+          },
+        ]
+      : [];
+
+    let result = invMatches.length > 0 ? `Found ${invMatches.length} inventory record(s).` : "No inventory records found.";
+    if (requestedInventoryId || sku) {
+      const available = skuTotals[0] ? skuTotals[0].AvailableQty : 0;
+      if (available > 0) {
+        result = `Inventory availability for ${summaryKeyLabel}: ${available} available across ${whereToGet.length} location(s).`;
+      } else {
+        result = `Inventory availability for ${summaryKeyLabel}: no available quantity found.`;
+      }
+    }
+
+    return {
+      success: true,
+      action: "lookup",
+      table: "inventory",
+      result,
+      inventory: invMatches.slice(0, 250).map(stripRowMeta),
+      locations: matchedLocations,
+      inventorySummary: {
+        skuTotals,
+        whereToGet,
+        requestedSku: sku || "",
+        requestedInventoryId: requestedInventoryId || "",
+        requestedLocationId: requestedLocationId || "",
+      },
+    };
+  }
+
   const dataset = await getTableData(table, cache);
 
   let matches = [];
@@ -929,6 +1339,13 @@ async function lookupGraph(intent) {
 
   if (matches.length === 0) {
     matches = dataset.rows.filter((row) => rowHasQuery(row, intent.query));
+  }
+
+  if (matches.length === 0 && table === "locations") {
+    const q = normalizeValue(intent.query);
+    if (q === "locations" || q === "list locations" || q === "show locations" || q === "all locations") {
+      matches = dataset.rows;
+    }
   }
 
   if (table !== "orders") {
@@ -951,11 +1368,12 @@ async function lookupGraph(intent) {
     return { success: true, action: "lookup", table: "orders", result: "No matching order found.", data: [] };
   }
 
-  const [{ shipmentsData, shipmentEventsData }, linesData, customerData, productData] = await Promise.all([
+  const [{ shipmentsData, shipmentEventsData }, linesData, customerData, productData, inventoryTables] = await Promise.all([
     getShipmentTables(cache),
     getTableData("orderlines", cache),
     getTableData("customers", cache),
     getTableData("products", cache),
+    getInventoryLocationTables(cache),
   ]);
 
   const lines = linesData.rows.filter((line) => normalizeValue(line.OrderNumber) === normalizeValue(order.OrderNumber));
@@ -966,6 +1384,55 @@ async function lookupGraph(intent) {
 
   const skuSet = new Set(lines.map((l) => normalizeValue(l.SKU)).filter(Boolean));
   const products = productData.rows.filter((p) => skuSet.has(normalizeValue(p.SKU)));
+
+  const allocations = inventoryTables.allocationsData
+    ? (inventoryTables.allocationsData.rows || [])
+        .filter((row) => normalizeValue(getRowFieldInsensitive(row, "OrderNumber")) === normalizeValue(order.OrderNumber))
+        .map(stripRowMeta)
+    : [];
+
+  const inventory = inventoryTables.inventoryData
+    ? (inventoryTables.inventoryData.rows || [])
+        .filter((row) => {
+          const sku = normalizeValue(getRowFieldInsensitive(row, "SKU"));
+          return sku && skuSet.has(sku);
+        })
+        .slice(0, 250)
+        .map(stripRowMeta)
+    : [];
+
+  const locationIds = new Set(
+    [...allocations, ...inventory]
+      .map((r) => normalizeValue(getRowFieldInsensitive(r, "LocationId")))
+      .filter(Boolean),
+  );
+
+  const locations = inventoryTables.locationsData
+    ? (inventoryTables.locationsData.rows || [])
+        .filter((row) => {
+          const id = normalizeValue(getRowFieldInsensitive(row, "LocationId"));
+          return id && locationIds.has(id);
+        })
+        .map(stripRowMeta)
+    : [];
+
+  const inventoryTotalsBySku = {};
+  for (const row of inventory) {
+    const sku = String(getRowFieldInsensitive(row, "SKU") || "").trim();
+    if (!sku) continue;
+    if (!inventoryTotalsBySku[sku]) {
+      inventoryTotalsBySku[sku] = { SKU: sku, OnHandQty: 0, ReservedQty: 0, AvailableQty: 0, InboundQty: 0, Locations: 0 };
+    }
+    inventoryTotalsBySku[sku].OnHandQty += toNumber(getRowFieldInsensitive(row, "OnHandQty"));
+    inventoryTotalsBySku[sku].ReservedQty += toNumber(getRowFieldInsensitive(row, "ReservedQty"));
+    inventoryTotalsBySku[sku].AvailableQty += toNumber(getRowFieldInsensitive(row, "AvailableQty"));
+    inventoryTotalsBySku[sku].InboundQty += toNumber(getRowFieldInsensitive(row, "InboundQty"));
+    inventoryTotalsBySku[sku].Locations += 1;
+  }
+  const inventorySummary = {
+    skuTotals: Object.values(inventoryTotalsBySku),
+    orderSkus: Array.from(skuSet.values()).filter(Boolean),
+  };
 
   const shipmentPipeline = buildShipmentPipelineForOrder({
     orderNumber: order.OrderNumber,
@@ -984,6 +1451,10 @@ async function lookupGraph(intent) {
     lines: lines.map(stripRowMeta),
     products: products.map(stripRowMeta),
     shipmentPipeline,
+    allocations,
+    inventory,
+    locations,
+    inventorySummary,
   };
 }
 
@@ -1687,7 +2158,27 @@ app.post("/api/chat-proxy", async (req, res) => {
   }
 
   const intent = parseAgentIntent(input);
-  if (shouldUseGraph()) {
+  const usesGraph = shouldUseGraph();
+  const allowFlowForNonOrderLookups = String(process.env.ALLOW_FLOW_NONORDER_LOOKUPS || "false").trim().toLowerCase() === "true";
+  const isNonOrderLookupTable = ["inventory", "locations", "orderallocations"].includes(String(intent.table || "").toLowerCase());
+  if (!usesGraph && isNonOrderLookupTable && !allowFlowForNonOrderLookups) {
+    const required = ["GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET", "GRAPH_DRIVE_ID", "GRAPH_ITEM_ID"];
+    const missing = required.filter((name) => !String(process.env[name] || "").trim());
+    const mode = getBackendMode();
+
+    res.status(200).json({
+      success: false,
+      action: "lookup",
+      table: intent.table,
+      result: missing.length > 0
+        ? `Graph is not configured for ${intent.table} lookups. Missing env var(s): ${missing.join(", ")}. (BACKEND_MODE=${mode})`
+        : `Graph lookups are disabled (BACKEND_MODE=${mode}). Set BACKEND_MODE=graph to enable ${intent.table} lookups.`,
+      intent,
+    });
+    return;
+  }
+
+  if (usesGraph) {
     try {
       const graphResult = await handleGraphIntent(intent);
       res.status(200).json({ ...graphResult, intent });

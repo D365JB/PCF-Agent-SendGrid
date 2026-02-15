@@ -118,6 +118,21 @@ pac pcf push
 2. Retry `pac pcf push`.
 3. If repeated, check Solution History in environment and retry after active import completes.
 
+### E) Error: `System.IO.IOException` / Access denied deleting `obj\PowerAppsToolsTemp_dev\bin\Debug`
+
+**Symptom**
+- `pac pcf push` terminates with an IOException like:
+  - `Access to the path ...\obj\PowerAppsToolsTemp_dev\bin\Debug is denied.`
+
+**Fix**
+Run from `PCFInitTest/PCFReactTest`:
+
+```powershell
+attrib -R -H -S .\obj\PowerAppsToolsTemp_dev /S /D
+Remove-Item -Recurse -Force .\obj\PowerAppsToolsTemp_dev
+pac pcf push
+```
+
 ### D) Manifest validation additional property `$`
 
 **Symptom**

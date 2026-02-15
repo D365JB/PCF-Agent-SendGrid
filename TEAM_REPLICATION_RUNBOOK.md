@@ -201,6 +201,13 @@ Use these directly in the chat:
 - `lookup customer C000029`
 - `lookup product SKU-00081`
 - `update orderline order=6600000942 line=2 openqty=10`
+- `track shipment for order 6600000680`
+- `carrier events / milestones for order 6600000680`
+- `inventory availability for MIL-INV-1002`
+- `where can I get MIL-INV-1002`
+- `list locations`
+- `allocations for order 6600000942`
+- `send email update to customer for order 6600000942`
 
 ---
 

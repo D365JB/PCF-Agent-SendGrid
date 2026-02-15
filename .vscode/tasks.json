@@ -1,6 +1,6 @@
 {
-	"version": "2.0.0",
 	"tasks": [
+}
 		{
 			"label": "Build PCF Project",
 			"type": "shell",
@@ -10,6 +10,48 @@
 				"$tsc"
 			],
 			"group": "build"
+		},
+		{
+			"label": "Start Azure Proxy WebApp (local)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				"Set-Location '.\\AzureProxyWebApp'; npm install; npm start"
+			],
+			"isBackground": true,
+			"problemMatcher": []
+		},
+		{
+			"label": "Test Azure Proxy WebApp /health",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				"Invoke-RestMethod -Method Get -Uri http://localhost:8080/health | ConvertTo-Json -Depth 5"
+			],
+			"isBackground": false,
+			"problemMatcher": []
+		},
+		{
+			"label": "Test Azure Proxy WebApp /api/chat-proxy (sample)",
+			"type": "shell",
+			"command": "powershell",
+			"args": [
+				"-NoProfile",
+				"-ExecutionPolicy",
+				"Bypass",
+				"-Command",
+				"$headers = @{ Origin = 'https://apps.powerapps.com' }; $body = @{ input = 'inventory for sku SKU-00029' } | ConvertTo-Json; Invoke-RestMethod -Method Post -Uri http://localhost:8080/api/chat-proxy -Headers $headers -ContentType 'application/json' -Body $body | ConvertTo-Json -Depth 10"
+			],
+			"isBackground": false,
+			"problemMatcher": []
 		}
 	]
 }

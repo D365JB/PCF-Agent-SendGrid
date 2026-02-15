@@ -55,10 +55,17 @@ type DataRow = Record<string, unknown>;
 
 interface AgentPayload {
   result?: string;
+  action?: string;
+  table?: string;
   order?: DataRow | null;
   customer?: DataRow | null;
   lines?: DataRow[];
   products?: DataRow[];
+  data?: DataRow[];
+  allocations?: DataRow[];
+  inventory?: DataRow[];
+  locations?: DataRow[];
+  inventorySummary?: Record<string, unknown> | null;
   changedFields?: string[];
   shipmentPipeline?: {
     shipments?: DataRow[];
@@ -139,13 +146,33 @@ export class CopilotAgentUI extends React.Component<CopilotAgentUIProps, Copilot
     return lower.includes("powerva.microsoft.com") || lower.includes("copilotstudio") || lower.includes("webchat");
   }
 
+  private normalizeProxyEndpoint(rawValue: string): string {
+    const normalized = this.normalizeEndpoint(rawValue);
+    if (!normalized) return "";
+
+    if (normalized.startsWith("/")) {
+      if (normalized === "/") return "/api/chat-proxy";
+      return normalized.endsWith("/") ? `${normalized}api/chat-proxy` : normalized;
+    }
+
+    try {
+      const url = new URL(normalized);
+      if (!url.pathname || url.pathname === "/") {
+        url.pathname = "/api/chat-proxy";
+      }
+      return url.toString();
+    } catch {
+      return normalized;
+    }
+  }
+
   private resolveConfiguredUrl(): string {
     const configuredEndpoint = (this.props.agentEndpoint || "").trim();
     const savedEndpoint = typeof window !== "undefined" ? (window.localStorage.getItem("pcfCopilotProxyEndpoint") || "").trim() : "";
     const rawValue = configuredEndpoint || savedEndpoint;
     const embedUrl = this.extractEmbedUrl(rawValue);
     if (embedUrl) return embedUrl;
-    return this.normalizeEndpoint(rawValue);
+    return this.normalizeProxyEndpoint(rawValue);
   }
 
   private toEndpointInfo(endpoint: string): string {
@@ -218,7 +245,7 @@ export class CopilotAgentUI extends React.Component<CopilotAgentUIProps, Copilot
     const endpoint = this.resolveConfiguredUrl();
     if (!endpoint) {
       this.setState({
-        error: "Assistant setup is not complete. Please contact your administrator.",
+        error: "Assistant setup is not complete. Set the PCF input property to your proxy URL (example: https://<your-proxy-host>/api/chat-proxy).",
       });
       return;
     }
@@ -295,13 +322,30 @@ export class CopilotAgentUI extends React.Component<CopilotAgentUIProps, Copilot
 
           if (data && typeof data === "object") {
             const parsed = data as AgentPayload & { response?: string; output?: string };
+            const parsedAction = typeof (parsed as any).action === "string" ? String((parsed as any).action) : "";
+            const parsedTable = typeof (parsed as any).table === "string" ? String((parsed as any).table) : "";
+            const parsedData = Array.isArray((parsed as any).data) ? ((parsed as any).data as DataRow[]) : [];
+
+            const mappedAllocations = Array.isArray((parsed as any).allocations) ? ((parsed as any).allocations as DataRow[]) : [];
+            const mappedInventory = Array.isArray((parsed as any).inventory) ? ((parsed as any).inventory as DataRow[]) : [];
+            const mappedLocations = Array.isArray((parsed as any).locations) ? ((parsed as any).locations as DataRow[]) : [];
+
+            const fromGeneric = (parsedTable || "").toLowerCase();
+
             agentPayload = {
               result: typeof parsed.result === "string" ? parsed.result : undefined,
+              action: parsedAction,
+              table: parsedTable,
               order: parsed.order && typeof parsed.order === "object" ? parsed.order : null,
               customer: parsed.customer && typeof parsed.customer === "object" ? parsed.customer : null,
               lines: Array.isArray(parsed.lines) ? parsed.lines : [],
               products: Array.isArray(parsed.products) ? parsed.products : [],
               shipmentPipeline: parsed.shipmentPipeline && typeof parsed.shipmentPipeline === "object" ? parsed.shipmentPipeline : null,
+              data: parsedData,
+              allocations: fromGeneric === "orderallocations" && mappedAllocations.length === 0 ? parsedData : mappedAllocations,
+              inventory: fromGeneric === "inventory" && mappedInventory.length === 0 ? parsedData : mappedInventory,
+              locations: fromGeneric === "locations" && mappedLocations.length === 0 ? parsedData : mappedLocations,
+              inventorySummary: (parsed as any).inventorySummary && typeof (parsed as any).inventorySummary === "object" ? ((parsed as any).inventorySummary as Record<string, unknown>) : null,
               changedFields: [],
             };
 
@@ -409,12 +453,27 @@ export class CopilotAgentUI extends React.Component<CopilotAgentUIProps, Copilot
     const customer = payload.customer && typeof payload.customer === "object" ? payload.customer : null;
     const lines = Array.isArray(payload.lines) ? payload.lines : [];
     const products = Array.isArray(payload.products) ? payload.products : [];
+    const allocations = Array.isArray(payload.allocations) ? payload.allocations : [];
+    const inventory = Array.isArray(payload.inventory) ? payload.inventory : [];
+    const locations = Array.isArray(payload.locations) ? payload.locations : [];
+    const genericData = Array.isArray(payload.data) ? payload.data : [];
     const shipmentPipeline = payload.shipmentPipeline && typeof payload.shipmentPipeline === "object" ? payload.shipmentPipeline : null;
     const shipments = shipmentPipeline && Array.isArray(shipmentPipeline.shipments) ? shipmentPipeline.shipments : [];
     const shipmentEvents = shipmentPipeline && Array.isArray(shipmentPipeline.events) ? shipmentPipeline.events : [];
     const changed = new Set(payload.changedFields || []);
 
-    if (!order && !customer && lines.length === 0 && products.length === 0 && shipments.length === 0 && shipmentEvents.length === 0) {
+    if (
+      !order &&
+      !customer &&
+      lines.length === 0 &&
+      products.length === 0 &&
+      shipments.length === 0 &&
+      shipmentEvents.length === 0 &&
+      allocations.length === 0 &&
+      inventory.length === 0 &&
+      locations.length === 0 &&
+      genericData.length === 0
+    ) {
       return null;
     }
 
@@ -536,6 +595,77 @@ export class CopilotAgentUI extends React.Component<CopilotAgentUIProps, Copilot
                 </div>
               </div>
             ))}
+          </div>
+        )}
+
+        {allocations.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ color: "#9ec9ff", fontWeight: 700, marginBottom: 6 }}>Allocations ({allocations.length})</div>
+            {allocations.slice(0, 8).map((a, idx) => (
+              <div key={`alloc-${idx}`} style={{ marginBottom: 6, padding: 6, borderRadius: 6, background: "rgba(0,0,0,0.15)" }}>
+                <div style={{ fontWeight: 600 }}>
+                  {this.toText(a["SKU"])} | Line {this.toText(a["LineNumber"])} | {this.toText(a["AllocatedQty"])} @ {this.toText(a["LocationId"])}
+                </div>
+                <div style={{ opacity: 0.92 }}>
+                  {this.toText(a["AllocationStatus"])} {this.toText(a["PromiseDate"]) !== "-" ? `| Promise ${this.toText(a["PromiseDate"])}` : ""}
+                </div>
+              </div>
+            ))}
+            {allocations.length > 8 && <div style={{ opacity: 0.85 }}>Showing first 8 of {allocations.length} allocations.</div>}
+          </div>
+        )}
+
+        {inventory.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ color: "#9ec9ff", fontWeight: 700, marginBottom: 6 }}>Inventory ({inventory.length})</div>
+            {inventory.slice(0, 10).map((inv, idx) => (
+              <div key={`inv-${idx}`} style={{ marginBottom: 6, padding: 6, borderRadius: 6, background: "rgba(0,0,0,0.15)" }}>
+                <div style={{ fontWeight: 600 }}>
+                  {this.toText(inv["SKU"])} @ {this.toText(inv["LocationId"])}
+                </div>
+                <div style={{ opacity: 0.92 }}>
+                  Avail {this.toText(inv["AvailableQty"])} | OnHand {this.toText(inv["OnHandQty"])} | Reserved {this.toText(inv["ReservedQty"])}
+                  {this.toText(inv["ATPDate"]) !== "-" ? ` | ATP ${this.toText(inv["ATPDate"])}` : ""}
+                </div>
+              </div>
+            ))}
+            {inventory.length > 10 && <div style={{ opacity: 0.85 }}>Showing first 10 of {inventory.length} inventory rows.</div>}
+          </div>
+        )}
+
+        {locations.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ color: "#9ec9ff", fontWeight: 700, marginBottom: 6 }}>Locations ({locations.length})</div>
+            {locations.slice(0, 8).map((loc, idx) => (
+              <div key={`loc-${idx}`} style={{ marginBottom: 6, padding: 6, borderRadius: 6, background: "rgba(0,0,0,0.15)" }}>
+                <div style={{ fontWeight: 600 }}>
+                  {this.toText(loc["LocationId"])} - {this.toText(loc["Name"])}
+                </div>
+                <div style={{ opacity: 0.92 }}>
+                  {this.toText(loc["Type"])} {this.toText(loc["City"]) !== "-" ? `| ${this.toText(loc["City"])}` : ""}{this.toText(loc["State"]) !== "-" ? `, ${this.toText(loc["State"])}` : ""}
+                </div>
+              </div>
+            ))}
+            {locations.length > 8 && <div style={{ opacity: 0.85 }}>Showing first 8 of {locations.length} locations.</div>}
+          </div>
+        )}
+
+        {genericData.length > 0 && allocations.length === 0 && inventory.length === 0 && locations.length === 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ color: "#9ec9ff", fontWeight: 700, marginBottom: 6 }}>Results ({genericData.length})</div>
+            {genericData.slice(0, 6).map((row, idx) => {
+              const entries = Object.entries(row || {}).filter(([k]) => !k.startsWith("__")).slice(0, 6);
+              return (
+                <div key={`data-${idx}`} style={{ marginBottom: 6, padding: 6, borderRadius: 6, background: "rgba(0,0,0,0.15)" }}>
+                  {entries.map(([k, v]) => (
+                    <div key={`${k}-${idx}`} style={{ opacity: 0.92 }}>
+                      <span style={{ color: "#9ec9ff", fontWeight: 600 }}>{k}:</span> {this.toText(v)}
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+            {genericData.length > 6 && <div style={{ opacity: 0.85 }}>Showing first 6 of {genericData.length} rows.</div>}
           </div>
         )}
 

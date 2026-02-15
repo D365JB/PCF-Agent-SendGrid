@@ -52,6 +52,44 @@ For email sending:
 - Graph: `EMAIL_PROVIDER=graph` + `GRAPH_MAIL_SENDER_UPN`
 - SendGrid: `EMAIL_PROVIDER=sendgrid` + `SENDGRID_API_KEY` + `SENDGRID_FROM_EMAIL`
 
+## Example prompts (end users)
+
+> Tip: the proxy supports both “plain English” and explicit key/value tokens like `ordernumber=...`.
+
+### Orders
+- `lookup order 6600000942`
+- `order 6600000942`
+- `update order 6600000942 status=Shipped`
+
+### Order lines
+- `lookup orderline order=6600000942 line=2`
+- `update orderline order=6600000942 line=2 openqty=10`
+
+### Customers
+- `lookup customer C000029`
+
+### Products
+- `lookup product SKU-00081`
+
+### Shipments
+- `track shipment for order 6600000680`
+- `carrier events / milestones for order 6600000680`
+- `is order 6600000680 running late?`
+
+### Inventory + locations (where to get it)
+- `inventory availability for MIL-INV-1002` (InventoryId)
+- `inventory availability for MIL-CHEM-GREEN95` (SKU)
+- `where can I get MIL-INV-1002`
+- `inventory for sku MIL-CHEM-GREEN95 at locationid=MIL-SPART-01`
+- `list locations`
+
+### Order allocations
+- `allocations for order 6600000942`
+
+### Customer email notification
+- `send email update to customer for order 6600000942`
+- `email customer for order 6600000942 message: Your order has shipped and is on the way.`
+
 ## Docs
 - See [AzureProxyWebApp/README.md](AzureProxyWebApp/README.md) for full backend details.
 - See [TEAM_QUICKSTART.md](TEAM_QUICKSTART.md) for a short runbook.

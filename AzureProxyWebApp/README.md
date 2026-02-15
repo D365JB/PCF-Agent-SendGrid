@@ -7,10 +7,64 @@ Secure proxy endpoint for the PCF chat control.
 - Request body: `{ "input": "look up order 6600000680" }`
 - Response body always includes `result`, and can include structured fields (`order`, `customer`, `lines`, `products`, `intent`).
 
+## Example prompts
+
+### Orders (lookup)
+- `lookup order 6600000942`
+- `order 6600000942`
+- `ordernumber=6600000942`
+
+### Orders (update)
+- `update order 6600000942 status=Confirmed`
+- `update order 6600000942 status=Shipped`
+
+### Order lines
+- `lookup orderline order=6600000942 line=2`
+- `update orderline order=6600000942 line=2 openqty=10`
+
+### Customers
+- `lookup customer C000029`
+
+### Products
+- `lookup product SKU-00081`
+
+### Shipments
+- `track shipment for order 6600000680`
+- `carrier events / milestones for order 6600000680`
+- `is order 6600000680 running late?`
+
+### Inventory (availability)
+
+Inventory can be queried by either:
+- **InventoryId** (often `MIL-INV-####` in the demo workbook), or
+- **SKU** (for example `MIL-CHEM-GREEN95`, `MIL-FAB-AX200`)
+
+Prompts:
+- `inventory availability for MIL-INV-1002` (InventoryId)
+- `inventory availability inventoryid=MIL-INV-1002` (explicit token)
+- `inventory availability for MIL-CHEM-GREEN95` (SKU)
+- `inventory for sku MIL-CHEM-GREEN95 at locationid=MIL-SPART-01`
+- `where can I get MIL-INV-1002`
+- `which location has MIL-CHEM-GREEN95`
+
+### Locations
+- `list locations`
+- `lookup locationid=MIL-SPART-01`
+- `locations in atlanta`
+
+### Order allocations
+- `allocations for order 6600000942`
+- `lookup orderallocations order=6600000942`
+
 ## Local
 ```powershell
+cd AzureProxyWebApp
 npm install
-$env:PORT=8080; node .\src\server.js
+
+# Optional: create a local .env (not committed)
+Copy-Item .\.env.example .\.env
+
+npm start
 ```
 
 ## Backend Modes

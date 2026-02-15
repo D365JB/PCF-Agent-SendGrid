@@ -79,8 +79,17 @@ Invoke-RestMethod -Uri $uri -Method Post -ContentType 'application/json' -Body (
 
 - `lookup order 6600000942`
 - `update order 6600000942 status=Shipped`
+- `lookup orderline order=6600000942 line=2`
+- `update orderline order=6600000942 line=2 openqty=10`
 - `lookup customer C000029`
 - `lookup product SKU-00081`
+- `track shipment for order 6600000680`
+- `is order 6600000680 running late?`
+- `inventory availability for MIL-INV-1002`
+- `where can I get MIL-INV-1002`
+- `list locations`
+- `allocations for order 6600000942`
+- `send email update to customer for order 6600000942`
 
 ---
 

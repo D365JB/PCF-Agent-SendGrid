@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from openpyxl import Workbook
+from openpyxl.utils import get_column_letter
 from openpyxl.worksheet.table import Table, TableStyleInfo
 
 
@@ -15,7 +16,7 @@ def add_table(ws, table_name: str, headers: list[str], rows: list[list[object]])
     # openpyxl tables need a ref range that includes header row.
     last_row = 1 + len(rows)
     last_col = len(headers)
-    ref = f"A1:{chr(ord('A') + last_col - 1)}{last_row}"
+    ref = f"A1:{get_column_letter(last_col)}{last_row}"
 
     table = Table(displayName=table_name, ref=ref)
     table.tableStyleInfo = TableStyleInfo(
@@ -29,8 +30,8 @@ def add_table(ws, table_name: str, headers: list[str], rows: list[list[object]])
 
     # Basic sizing
     for idx, header in enumerate(headers, start=1):
-        width = min(max(len(str(header)) + 2, 12), 32)
-        ws.column_dimensions[chr(ord('A') + idx - 1)].width = width
+        width = min(max(len(str(header)) + 2, 12), 36)
+        ws.column_dimensions[get_column_letter(idx)].width = width
 
 
 def main() -> None:
@@ -277,11 +278,160 @@ def main() -> None:
     ]
     add_table(ws, "tblShipmentEvents", shipmentevents_headers, shipmentevents_rows)
 
+    # Locations (inventory lookup support)
+    ws = wb.create_sheet("Locations")
+    locations_headers = [
+        "LocationId",
+        "Name",
+        "Type",
+        "Address1",
+        "City",
+        "State",
+        "PostalCode",
+        "Country",
+        "TimeZone",
+        "Latitude",
+        "Longitude",
+        "Email",
+        "Phone",
+        "IsActive",
+        "Notes",
+    ]
+    locations_rows = [
+        [
+            "DC-DAL-01",
+            "Dallas Distribution Center",
+            "DC",
+            "123 Example Rd",
+            "Dallas",
+            "TX",
+            "75201",
+            "US",
+            "America/Chicago",
+            32.7767,
+            -96.7970,
+            "dal-dc@example.com",
+            "+1-555-0101",
+            True,
+            "",
+        ],
+        [
+            "3PL-SEA-01",
+            "Seattle 3PL",
+            "3PL",
+            "500 Demo Ave",
+            "Seattle",
+            "WA",
+            "98101",
+            "US",
+            "America/Los_Angeles",
+            47.6062,
+            -122.3321,
+            "sea-3pl@example.com",
+            "+1-555-0102",
+            True,
+            "",
+        ],
+    ]
+    add_table(ws, "tblLocations", locations_headers, locations_rows)
+
+    # Inventory (availability + where-to-get prompts)
+    ws = wb.create_sheet("Inventory")
+    inventory_headers = [
+        "InventoryId",
+        "SKU",
+        "LocationId",
+        "LotNumber",
+        "SerialNumber",
+        "Condition",
+        "UOM",
+        "OnHandQty",
+        "ReservedQty",
+        "AvailableQty",
+        "InboundQty",
+        "ATPDate",
+        "ExpirationDate",
+        "LastUpdatedAt",
+        "Notes",
+    ]
+    inventory_rows = [
+        [
+            "MIL-INV-1002",
+            "SKU-00029",
+            "DC-DAL-01",
+            "LOT-2026-02-A",
+            "",
+            "GOOD",
+            "EA",
+            120,
+            20,
+            100,
+            50,
+            "2026-02-18",
+            "",
+            "2026-02-15T00:00:00Z",
+            "Example inventory row for availability prompts",
+        ],
+        [
+            "MIL-INV-1003",
+            "SKU-00097",
+            "3PL-SEA-01",
+            "",
+            "SER-XYZ-000097-01",
+            "GOOD",
+            "EA",
+            1,
+            0,
+            1,
+            0,
+            "",
+            "",
+            "2026-02-15T00:00:00Z",
+            "Serialized example",
+        ],
+    ]
+    add_table(ws, "tblInventory", inventory_headers, inventory_rows)
+
+    # OrderAllocations (links orders/lines -> inventory locations)
+    ws = wb.create_sheet("OrderAllocations")
+    allocations_headers = [
+        "AllocationId",
+        "OrderNumber",
+        "LineNumber",
+        "SKU",
+        "LocationId",
+        "AllocatedQty",
+        "AllocationStatus",
+        "PromiseDate",
+        "LotNumber",
+        "SerialNumber",
+        "LastUpdatedAt",
+        "Notes",
+    ]
+    allocations_rows = [
+        [
+            "ALLOC-6600000680-1",
+            "6600000680",
+            1,
+            "SKU-00029",
+            "DC-DAL-01",
+            5,
+            "Allocated",
+            "2026-02-18",
+            "LOT-2026-02-A",
+            "",
+            "2026-02-15T00:00:00Z",
+            "",
+        ]
+    ]
+    add_table(ws, "tblOrderAllocations", allocations_headers, allocations_rows)
+
     # Make it obvious this is a template
     meta = wb.create_sheet("README")
     meta["A1"].value = "Template workbook for PCFCopilot demo"
     meta["A2"].value = "This file contains sanitized sample data and required Excel Tables. Upload to OneDrive/SharePoint and configure GRAPH_DRIVE_ID/GRAPH_ITEM_ID + table IDs/names."
-    meta["A3"].value = f"Generated: {datetime.now(timezone.utc).isoformat()}"
+    meta["A3"].value = "Tables included: Orders, OrderLines, Customers, Products, Shipments, ShipmentEvents, Locations, Inventory, OrderAllocations."
+    meta["A4"].value = f"Generated: {datetime.now(timezone.utc).isoformat()}"
 
     wb.save(out_path)
     print(f"Wrote {out_path}")

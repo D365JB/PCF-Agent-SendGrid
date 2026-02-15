@@ -33,5 +33,8 @@
 /tmp-sharepoint.xlsx
 /AzureProxyFunction/deploy-func.zip
 
+# excel templates generated locally (do not commit)
+/excel-templates/Inventory_Location_Tables_TEMPLATE.xlsx
+
 # macos
 .DS_Store
