@@ -1,0 +1,3 @@
+ShipmentId	OrderNumber	Mode	Carrier	TrackingNumber	PlannedShipDate	PlannedDeliveryDate	SAPShipmentId	Origin	Destination	CustomerEmailOverride	LastEvaluatedAt	PredictedDeliveryDate	PredictedDelayHours	IsRunningLate	LastMilestoneCode	LastMilestoneAt
+SHP-6600000680-01	6600000680	parcel	UPS	1Z999AA10123456784	2026-02-15T08:00:00Z	2026-02-20T17:00:00Z	0080001234	Dallas, TX	Seattle, WA							
+SHP-6600000942-01	6600000942	ltl	FedEx Freight	PRO123456789	2026-02-14T14:00:00Z	2026-02-19T20:00:00Z	0080005678	Memphis, TN	Chicago, IL							

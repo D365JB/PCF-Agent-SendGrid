@@ -90,3 +90,50 @@ Behavior:
 ## Notes
 - For order-line updates, include a stable key column in Excel (`LineKey = OrderNumber-LineNumber`) for deterministic updates.
 - For best reliability under concurrent edits, migrate from Excel tables to Dataverse or Azure SQL later.
+
+## Shipment tracking (carrier + SAP events -> predicted delay -> proactive notification)
+
+### Workbook tables
+Add these tables to the same workbook used by `Orders`/`OrderLines`:
+- `Shipments` (override with `GRAPH_TABLE_SHIPMENTS`)
+- `ShipmentEvents` (override with `GRAPH_TABLE_SHIPMENTEVENTS`)
+
+See [EXCEL_SHIPMENT_TABLES.md](../EXCEL_SHIPMENT_TABLES.md) for the recommended columns and examples.
+
+### Provision tables automatically (recommended)
+If your workbook is stored in SharePoint/OneDrive, you generally **can’t** use a sharing URL from a script without authenticating.
+Instead, provision tables using Microsoft Graph with the same `GRAPH_*` credentials you already configure for the backend.
+
+From repo root:
+```powershell
+cd AzureProxyWebApp
+npm run provision:shipments
+```
+
+If you only have a SharePoint/OneDrive sharing link to the workbook, you can set:
+- `SHARE_URL=<your sharing link>`
+
+The script will resolve `driveId`/`itemId` automatically via Graph.
+
+This script:
+- creates worksheets (if missing)
+- creates Excel tables named `Shipments` and `ShipmentEvents` (or your configured overrides)
+- loads starter rows from `excel-templates/*.tsv`
+
+If you need to recreate tables, run:
+```powershell
+$env:PROVISION_FORCE='true'; npm run provision:shipments
+```
+
+### App Settings
+- `GRAPH_TABLE_SHIPMENTS` (default `Shipments`)
+- `GRAPH_TABLE_SHIPMENTEVENTS` (default `ShipmentEvents`)
+- `LATE_THRESHOLD_HOURS` (default `24`) -> “running late” threshold for alerts
+
+### Chat prompts
+- `track shipment for order 6600000680`
+- `carrier events / milestones for order 6600000680`
+- `is order 6600000680 running late?`
+
+The `/api/chat-proxy` response includes a structured `shipmentPipeline.steps` field that the PCF control can render as the visible step sequence:
+`Carrier + SAP shipment events → predicted delay → proactive notification`.

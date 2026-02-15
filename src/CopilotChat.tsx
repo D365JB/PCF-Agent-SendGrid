@@ -5,9 +5,10 @@ export interface CopilotChatProps {
   value: string;
   onSend: (message: string) => void;
   messages: Array<{ sender: string; text: string }>;
+  pipelineSteps?: Array<{ label: string; status: string; detail?: string }>;
 }
 
-export const CopilotChat: React.FC<CopilotChatProps> = ({ value, onSend, messages }) => {
+export const CopilotChat: React.FC<CopilotChatProps> = ({ value, onSend, messages, pipelineSteps }) => {
   const [input, setInput] = React.useState("");
 
   const handleSend = () => {
@@ -33,6 +34,48 @@ export const CopilotChat: React.FC<CopilotChatProps> = ({ value, onSend, message
       maxWidth: 400,
       margin: "auto"
     }}>
+      {Array.isArray(pipelineSteps) && pipelineSteps.length > 0 && (
+        <div style={{
+          marginBottom: 12,
+          background: "#fff",
+          borderRadius: 8,
+          padding: 12,
+          border: "1px solid #e6e6e6",
+          boxShadow: "0 1px 4px rgba(0,0,0,0.03)"
+        }}>
+          <div style={{ fontSize: 12, fontWeight: 600, color: "#444", marginBottom: 8 }}>
+                  Carrier + SAP shipment events → predicted delay → proactive notification
+          </div>
+          {pipelineSteps.map((s, idx) => {
+            const status = String(s.status || "").toLowerCase();
+            const badgeBg = status === "action" ? "#0078d4" : status === "missing" ? "#888" : "#e5e5e5";
+            const badgeColor = status === "action" ? "#fff" : status === "missing" ? "#fff" : "#333";
+            const badgeText = status === "action" ? "ACTION" : status === "missing" ? "MISSING" : "OK";
+            return (
+              <div key={idx} style={{ display: "flex", alignItems: "center", marginBottom: idx === pipelineSteps.length - 1 ? 0 : 6 }}>
+                <span style={{
+                  display: "inline-block",
+                  minWidth: 62,
+                  textAlign: "center",
+                  padding: "2px 8px",
+                  borderRadius: 999,
+                  background: badgeBg,
+                  color: badgeColor,
+                  fontSize: 11,
+                  fontWeight: 700,
+                  marginRight: 10
+                }}>
+                  {badgeText}
+                </span>
+                <div style={{ flex: 1 }}>
+                  <div style={{ fontSize: 12, fontWeight: 600, color: "#333" }}>{s.label}</div>
+                  {s.detail && <div style={{ fontSize: 12, color: "#666" }}>{s.detail}</div>}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
       <div style={{
         height: 260,
         overflowY: "auto",

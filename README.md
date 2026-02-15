@@ -5,6 +5,7 @@ This repo contains:
 - An **Azure Container App** backend that:
   - Looks up and updates order data (Microsoft Graph Excel workbook tables)
   - Sends customer emails (Graph or SendGrid)
+  - Tracks shipments from workbook event tables (carrier/SAP events -> predicted delay -> proactive notification)
 
 ## Quick start (simple)
 
@@ -49,3 +50,4 @@ For email sending:
 - See [AzureProxyWebApp/README.md](AzureProxyWebApp/README.md) for full backend details.
 - See [TEAM_QUICKSTART.md](TEAM_QUICKSTART.md) for a short runbook.
 - See [TEAM_REPLICATION_RUNBOOK.md](TEAM_REPLICATION_RUNBOOK.md) for deeper setup.
+- See [EXCEL_SHIPMENT_TABLES.md](EXCEL_SHIPMENT_TABLES.md) for the shipment tracking workbook table schema.

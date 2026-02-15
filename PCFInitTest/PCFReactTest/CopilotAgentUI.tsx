@@ -60,6 +60,13 @@ interface AgentPayload {
   lines?: DataRow[];
   products?: DataRow[];
   changedFields?: string[];
+  shipmentPipeline?: {
+    shipments?: DataRow[];
+    events?: DataRow[];
+    prediction?: Record<string, unknown>;
+    steps?: Array<{ label: string; status: string; detail?: string }>;
+    lastMilestone?: Record<string, unknown> | null;
+  } | null;
 }
 
 interface ChatMessage {
@@ -294,6 +301,7 @@ export class CopilotAgentUI extends React.Component<CopilotAgentUIProps, Copilot
               customer: parsed.customer && typeof parsed.customer === "object" ? parsed.customer : null,
               lines: Array.isArray(parsed.lines) ? parsed.lines : [],
               products: Array.isArray(parsed.products) ? parsed.products : [],
+              shipmentPipeline: parsed.shipmentPipeline && typeof parsed.shipmentPipeline === "object" ? parsed.shipmentPipeline : null,
               changedFields: [],
             };
 
@@ -401,9 +409,12 @@ export class CopilotAgentUI extends React.Component<CopilotAgentUIProps, Copilot
     const customer = payload.customer && typeof payload.customer === "object" ? payload.customer : null;
     const lines = Array.isArray(payload.lines) ? payload.lines : [];
     const products = Array.isArray(payload.products) ? payload.products : [];
+    const shipmentPipeline = payload.shipmentPipeline && typeof payload.shipmentPipeline === "object" ? payload.shipmentPipeline : null;
+    const shipments = shipmentPipeline && Array.isArray(shipmentPipeline.shipments) ? shipmentPipeline.shipments : [];
+    const shipmentEvents = shipmentPipeline && Array.isArray(shipmentPipeline.events) ? shipmentPipeline.events : [];
     const changed = new Set(payload.changedFields || []);
 
-    if (!order && !customer && lines.length === 0 && products.length === 0) {
+    if (!order && !customer && lines.length === 0 && products.length === 0 && shipments.length === 0 && shipmentEvents.length === 0) {
       return null;
     }
 
@@ -492,6 +503,39 @@ export class CopilotAgentUI extends React.Component<CopilotAgentUIProps, Copilot
               </div>
             ))}
             {products.length > 4 && <div style={{ opacity: 0.85 }}>Showing first 4 of {products.length} products.</div>}
+          </div>
+        )}
+
+        {shipments.length > 0 && (
+          <div style={{ marginTop: products.length > 0 ? 10 : 0 }}>
+            <div style={{ color: "#9ec9ff", fontWeight: 700, marginBottom: 6 }}>Shipments ({shipments.length})</div>
+            {shipments.slice(0, 3).map((s, idx) => (
+              <div key={`shipment-${idx}`} style={{ marginBottom: 6, padding: 6, borderRadius: 6, background: "rgba(0,0,0,0.15)" }}>
+                <div style={{ fontWeight: 600 }}>
+                  {this.toText(s["Carrier"])} {this.toText(s["TrackingNumber"]) !== "-" ? `(${this.toText(s["TrackingNumber"])})` : ""}
+                </div>
+                <div style={{ opacity: 0.92 }}>
+                  Mode {this.toText(s["Mode"])} | Planned Delivery {this.toText(s["PlannedDeliveryDate"])}
+                </div>
+              </div>
+            ))}
+            {shipments.length > 3 && <div style={{ opacity: 0.85 }}>Showing first 3 of {shipments.length} shipments.</div>}
+          </div>
+        )}
+
+        {shipmentEvents.length > 0 && (
+          <div style={{ marginTop: 10 }}>
+            <div style={{ color: "#9ec9ff", fontWeight: 700, marginBottom: 6 }}>Shipment Events ({shipmentEvents.length})</div>
+            {shipmentEvents.slice(Math.max(0, shipmentEvents.length - 6)).map((e, idx) => (
+              <div key={`shipmentevent-${idx}`} style={{ marginBottom: 6, padding: 6, borderRadius: 6, background: "rgba(0,0,0,0.15)" }}>
+                <div style={{ fontWeight: 600 }}>
+                  {this.toText(e["MilestoneCode"])} {this.toText(e["EventDescription"]) !== "-" ? `- ${this.toText(e["EventDescription"])}` : ""}
+                </div>
+                <div style={{ opacity: 0.92 }}>
+                  {this.toText(e["EventTime"])} {this.toText(e["Location"]) !== "-" ? `| ${this.toText(e["Location"])}` : ""}
+                </div>
+              </div>
+            ))}
           </div>
         )}
 

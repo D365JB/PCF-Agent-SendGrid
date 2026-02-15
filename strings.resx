@@ -2,3 +2,7 @@ PCFCopilot_DisplayName=Copilot Chat Control
 PCFCopilot_Description=A PCF control for Dynamics that integrates Copilot chat interface.
 PCFCopilot_ApiKey_DisplayName=Copilot API Key
 PCFCopilot_ApiKey_Description=API key for Copilot integration
+PCFCopilot_ProxyUrl_DisplayName=Proxy URL
+PCFCopilot_ProxyUrl_Description=Base URL of the AzureProxyWebApp (example: https://<app>/). Used for /api/chat-proxy.
+PCFCopilot_ProxyKey_DisplayName=Proxy Shared Secret
+PCFCopilot_ProxyKey_Description=Optional shared secret sent as x-proxy-key when REQUIRE_SHARED_SECRET is enabled on the backend.

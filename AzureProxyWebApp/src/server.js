@@ -55,6 +55,16 @@ function normalizeTable(input) {
   if (input.includes("products") || input.includes("product ") || input.includes("sku")) {
     return "products";
   }
+  if (
+    input.includes("shipment events") ||
+    input.includes("carrier events") ||
+    input.includes("tracking milestones")
+  ) {
+    return "shipmentevents";
+  }
+  if (input.includes("shipments") || input.includes("shipment") || input.includes("tracking") || input.includes("track ")) {
+    return "shipments";
+  }
   return "orders";
 }
 
@@ -68,6 +78,19 @@ function normalizeAction(input) {
 
   if (input.includes("notify customer") || input.includes("send update to customer")) {
     return "notify";
+  }
+
+  if (
+    input.includes("track") ||
+    input.includes("tracking") ||
+    input.includes("shipment") ||
+    input.includes("carrier event") ||
+    input.includes("carrier events") ||
+    input.includes("milestone") ||
+    input.includes("milestones") ||
+    input.includes("running late")
+  ) {
+    return "shipment";
   }
 
   if (input.includes("update") || input.includes("set ") || input.includes("change ")) {
@@ -264,9 +287,36 @@ const graphTokenCache = {
 const graphTableCache = new Map();
 
 function getTableCacheTtlMs() {
-  const seconds = Number(process.env.GRAPH_TABLE_CACHE_SECONDS || 30);
+  // Demo-friendly default: cache workbook tables for 2 minutes unless explicitly overridden.
+  const seconds = Number(process.env.GRAPH_TABLE_CACHE_SECONDS || 120);
   if (!Number.isFinite(seconds) || seconds <= 0) return 0;
   return seconds * 1000;
+}
+
+function shouldWarmCacheOnStart() {
+  return String(process.env.WARM_CACHE_ON_START || "false").trim().toLowerCase() === "true";
+}
+
+async function warmGraphWorkbookCache() {
+  if (!shouldUseGraph()) return;
+  if (!shouldWarmCacheOnStart()) return;
+
+  const cache = {};
+  try {
+    await Promise.all([
+      getTableData("orders", cache),
+      getTableData("customers", cache),
+      getTableData("orderlines", cache),
+      getTableData("products", cache),
+      // Optional tables: may not exist, so don't fail warmup.
+      tryGetTableData("shipments", cache),
+      tryGetTableData("shipmentevents", cache),
+    ]);
+    console.log("Graph workbook cache warmed.");
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Graph workbook cache warm failed: ${message}`);
+  }
 }
 
 function getTableCacheKey(tableName) {
@@ -333,6 +383,8 @@ function getTableName(table) {
     orderlines: process.env.GRAPH_TABLE_ORDERLINES || "OrderLines",
     customers: process.env.GRAPH_TABLE_CUSTOMERS || "Customers",
     products: process.env.GRAPH_TABLE_PRODUCTS || "Products",
+    shipments: process.env.GRAPH_TABLE_SHIPMENTS || "Shipments",
+    shipmentevents: process.env.GRAPH_TABLE_SHIPMENTEVENTS || "ShipmentEvents",
   };
   return map[table] || map.orders;
 }
@@ -340,6 +392,35 @@ function getTableName(table) {
 function normalizeValue(value) {
   if (value === null || value === undefined) return "";
   return String(value).trim().toLowerCase();
+}
+
+function getRowFieldInsensitive(row, fieldName) {
+  if (!row || typeof row !== "object") return undefined;
+  const wanted = String(fieldName || "").trim().toLowerCase();
+  if (!wanted) return undefined;
+
+  if (Object.prototype.hasOwnProperty.call(row, fieldName)) {
+    return row[fieldName];
+  }
+
+  for (const key of Object.keys(row)) {
+    if (key.startsWith("__")) continue;
+    if (String(key).trim().toLowerCase() === wanted) {
+      return row[key];
+    }
+  }
+
+  return undefined;
+}
+
+function getDemoDelayMs() {
+  const raw = Number(process.env.DEMO_DELAY_MS || 0);
+  if (!Number.isFinite(raw) || raw <= 0) return 0;
+  return Math.min(Math.floor(raw), 5000);
+}
+
+function sleepMs(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
 function rowHasQuery(row, query) {
@@ -447,8 +528,10 @@ async function getTableData(table, cache) {
   const encodedTable = encodeURIComponent(tableName);
   const base = `/drives/${encodeURIComponent(driveId)}/items/${encodeURIComponent(itemId)}/workbook/tables/${encodedTable}`;
 
-  const columnsResp = await graphRequest(`${base}/columns?$top=300`);
-  const rowsResp = await graphRequest(`${base}/rows?$top=2000`);
+  const [columnsResp, rowsResp] = await Promise.all([
+    graphRequest(`${base}/columns?$top=300`),
+    graphRequest(`${base}/rows?$top=2000`),
+  ]);
 
   const headers = (columnsResp.value || []).map((c) => c.name);
   const rows = (rowsResp.value || []).map((row) => {
@@ -466,9 +549,365 @@ async function getTableData(table, cache) {
   return result;
 }
 
+function stripRowMeta(row) {
+  if (!row) return row;
+  const copy = { ...row };
+  delete copy.__index;
+  delete copy.__values;
+  return copy;
+}
+
+async function getShipmentTables(cache) {
+  const [shipmentsData, shipmentEventsData] = await Promise.all([
+    tryGetTableData("shipments", cache),
+    tryGetTableData("shipmentevents", cache),
+  ]);
+  return { shipmentsData, shipmentEventsData };
+}
+
+function buildShipmentPipelineForOrder({ orderNumber, order, shipmentsData, shipmentEventsData }) {
+  if (!shipmentsData) return null;
+
+  const shipments = (shipmentsData.rows || [])
+    .filter((row) => normalizeValue(getRowFieldInsensitive(row, "OrderNumber")) === normalizeValue(orderNumber))
+    .map(stripRowMeta);
+
+  if (shipments.length === 0) {
+    return {
+      orderNumber,
+      shipments: [],
+      events: [],
+      prediction: {
+        plannedEta: "",
+        predictedEta: "",
+        delayHours: 0,
+        isRunningLate: false,
+        thresholdHours: getLateThresholdHours(),
+      },
+      steps: buildShipmentPipelineSteps({ events: [], prediction: {} }),
+    };
+  }
+
+  const allEvents = [];
+  if (shipmentEventsData) {
+    const rows = shipmentEventsData.rows || [];
+    for (const shipment of shipments) {
+      const shipmentId = String(shipment.ShipmentId || "").trim();
+      const trackingNumber = String(shipment.TrackingNumber || "").trim();
+
+      const matching = rows.filter((row) => {
+        const rowShipmentId = String(getRowFieldInsensitive(row, "ShipmentId") || "").trim();
+        const rowTracking = String(getRowFieldInsensitive(row, "TrackingNumber") || "").trim();
+        if (shipmentId && rowShipmentId) return normalizeValue(rowShipmentId) === normalizeValue(shipmentId);
+        if (trackingNumber && rowTracking) return normalizeValue(rowTracking) === normalizeValue(trackingNumber);
+        return false;
+      });
+
+      matching.forEach((row) => {
+        const normalized = normalizeShipmentEvent(row);
+        normalized.ShipmentId = normalized.ShipmentId || shipmentId;
+        normalized.TrackingNumber = normalized.TrackingNumber || trackingNumber;
+        allEvents.push(normalized);
+      });
+    }
+  }
+
+  allEvents.sort((a, b) => (a.EventTimeMs || 0) - (b.EventTimeMs || 0));
+  const lastEvent = allEvents.length > 0 ? allEvents[allEvents.length - 1] : null;
+
+  const primaryShipment = shipments[0] || {};
+  const shipmentMode = normalizeShipmentMode(primaryShipment.Mode);
+  const plannedDeliveryMs =
+    tryParseDate(primaryShipment.PlannedDeliveryDate) ||
+    tryParseDate(order?.CustomerReqDelDate) ||
+    tryParseDate(order?.RequestedDeliveryDate) ||
+    null;
+
+  const prediction = computeShipmentPrediction({
+    plannedDeliveryMs,
+    events: allEvents,
+    shipmentMode,
+  });
+
+  const pipeline = {
+    orderNumber,
+    shipmentMode,
+    shipments,
+    events: allEvents.map((e) => {
+      const { EventTimeMs, ...rest } = e;
+      return rest;
+    }),
+    lastMilestone: lastEvent
+      ? {
+          code: lastEvent.MilestoneCode,
+          at: lastEvent.EventTime,
+          description: lastEvent.EventDescription,
+          location: lastEvent.Location,
+          source: lastEvent.Source,
+        }
+      : null,
+    prediction,
+  };
+
+  pipeline.steps = buildShipmentPipelineSteps({ events: allEvents, prediction });
+  return pipeline;
+}
+
 function detectOrderNumberFromText(input) {
   const match = String(input || "").match(/\b\d{8,12}\b/);
   return match ? match[0] : "";
+}
+
+function getLateThresholdHours() {
+  const raw = Number(process.env.LATE_THRESHOLD_HOURS || 24);
+  if (!Number.isFinite(raw) || raw <= 0) return 24;
+  return raw;
+}
+
+function tryParseDate(value) {
+  if (value === null || value === undefined) return null;
+  if (value instanceof Date) {
+    const t = value.getTime();
+    return Number.isFinite(t) ? t : null;
+  }
+
+  if (typeof value === "number") {
+    // Excel can send serials, but Graph usually returns strings. If this is a unix epoch, accept it.
+    if (value > 1000000000) return value * (value < 20000000000 ? 1000 : 1);
+  }
+
+  const text = String(value).trim();
+  if (!text) return null;
+  const parsed = Date.parse(text);
+  if (Number.isFinite(parsed)) return parsed;
+  return null;
+}
+
+function normalizeShipmentMode(value) {
+  const mode = normalizeValue(value);
+  if (!mode) return "other";
+  if (mode.includes("parcel") || mode.includes("small")) return "parcel";
+  if (mode.includes("courier")) return "courier";
+  if (mode.includes("ltl")) return "ltl";
+  if (mode.includes("ftl") || mode.includes("truck")) return "ftl";
+  if (mode.includes("air")) return "air";
+  if (mode.includes("ocean") || mode.includes("sea")) return "ocean";
+  if (mode.includes("rail")) return "rail";
+  return "other";
+}
+
+function detectMilestoneCode(event) {
+  const text = `${event.EventCode || ""} ${event.Status || ""} ${event.EventDescription || ""}`.toLowerCase();
+  if (!text.trim()) return "UNKNOWN";
+
+  if (text.includes("delivered") || text.includes("proof of delivery") || text.includes("pod")) return "DELIVERED";
+  if (text.includes("out for delivery") || text.includes("ofd")) return "OUT_FOR_DELIVERY";
+  if (text.includes("customs") && (text.includes("hold") || text.includes("delay") || text.includes("inspection"))) return "CUSTOMS_HOLD";
+  if (text.includes("exception") || text.includes("weather") || text.includes("damage") || text.includes("lost") || text.includes("delay")) return "EXCEPTION";
+  if (text.includes("arrived") && (text.includes("facility") || text.includes("hub") || text.includes("terminal"))) return "ARRIVED_HUB";
+  if (text.includes("departed") && (text.includes("facility") || text.includes("hub") || text.includes("terminal"))) return "DEPARTED_HUB";
+  if (text.includes("depart") || text.includes("loaded") || text.includes("in transit") || text.includes("linehaul")) return "IN_TRANSIT";
+  if (text.includes("picked") || text.includes("pickup") || text.includes("collected")) return "PICKED_UP";
+  if (text.includes("label created") || text.includes("manifest")) return "LABEL_CREATED";
+  return "OTHER";
+}
+
+function normalizeShipmentEvent(row) {
+  const eventTimeRaw = row.EventTime ?? row.Timestamp ?? row.DateTime ?? row.EventDateTime;
+  const eventTimeMs = tryParseDate(eventTimeRaw);
+
+  const normalized = {
+    ShipmentId: String(row.ShipmentId || "").trim(),
+    TrackingNumber: String(row.TrackingNumber || "").trim(),
+    Source: String(row.Source || "").trim() || "Other",
+    EventTime: eventTimeMs ? new Date(eventTimeMs).toISOString() : "",
+    EventTimeMs: eventTimeMs || 0,
+    EventCode: String(row.EventCode || "").trim(),
+    Status: String(row.Status || "").trim(),
+    Location: String(row.Location || "").trim(),
+    EventDescription: String(row.EventDescription || row.Description || row.Details || "").trim(),
+    EstimatedDeliveryDate: row.EstimatedDeliveryDate || row.EstimatedDelivery || row.ETA || "",
+  };
+
+  return {
+    ...normalized,
+    MilestoneCode: detectMilestoneCode(normalized),
+  };
+}
+
+function buildShipmentPipelineSteps(pipeline) {
+  const steps = [];
+
+  const eventsCount = Array.isArray(pipeline?.events) ? pipeline.events.length : 0;
+  steps.push({
+    label: "Carrier + SAP shipment events",
+    status: eventsCount > 0 ? "ok" : "missing",
+    detail: eventsCount > 0 ? `${eventsCount} event(s)` : "No events found",
+  });
+
+  const prediction = pipeline?.prediction || {};
+  steps.push({
+    label: "Predicted delay",
+    status: prediction.predictedEta ? "ok" : "missing",
+    detail: prediction.predictedEta
+      ? `${prediction.delayHours >= 0 ? "+" : ""}${prediction.delayHours}h vs plan`
+      : "No predicted ETA",
+  });
+
+  steps.push({
+    label: "Proactive notification",
+    status: prediction.isRunningLate ? "action" : "ok",
+    detail: prediction.isRunningLate ? "Recommended" : "Not needed",
+  });
+
+  return steps;
+}
+
+async function tryGetTableData(table, cache) {
+  try {
+    return await getTableData(table, cache);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    // Common case: workbook exists but table doesn't (yet). Treat as "optional".
+    if (/ItemNotFound|Resource not found|not found|InvalidArgument/i.test(message)) {
+      return null;
+    }
+    throw error;
+  }
+}
+
+function computeShipmentPrediction({ plannedDeliveryMs, events, shipmentMode }) {
+  const thresholdHours = getLateThresholdHours();
+  const thresholdMs = thresholdHours * 60 * 60 * 1000;
+
+  if (!plannedDeliveryMs) {
+    return {
+      plannedEta: "",
+      predictedEta: "",
+      delayHours: 0,
+      isRunningLate: false,
+      reason: "Missing planned delivery date",
+      thresholdHours,
+      mode: shipmentMode,
+    };
+  }
+
+  const plannedEtaIso = new Date(plannedDeliveryMs).toISOString();
+
+  const sorted = Array.isArray(events) ? [...events].sort((a, b) => (a.EventTimeMs || 0) - (b.EventTimeMs || 0)) : [];
+  const last = sorted.length > 0 ? sorted[sorted.length - 1] : null;
+
+  const delivered = last && last.MilestoneCode === "DELIVERED";
+  if (delivered) {
+    return {
+      plannedEta: plannedEtaIso,
+      predictedEta: plannedEtaIso,
+      delayHours: 0,
+      isRunningLate: false,
+      reason: "Delivered",
+      thresholdHours,
+      mode: shipmentMode,
+    };
+  }
+
+  // Prefer explicit updated ETA signals from events when present.
+  let predictedMs = plannedDeliveryMs;
+  for (let i = sorted.length - 1; i >= 0; i--) {
+    const eta = tryParseDate(sorted[i].EstimatedDeliveryDate);
+    if (eta) {
+      predictedMs = eta;
+      break;
+    }
+  }
+
+  const delayMs = predictedMs - plannedDeliveryMs;
+  const delayHours = Math.round((delayMs / (60 * 60 * 1000)) * 10) / 10;
+  const isRunningLate = delayMs > thresholdMs;
+
+  const hasException = sorted.some((e) => e.MilestoneCode === "EXCEPTION" || e.MilestoneCode === "CUSTOMS_HOLD");
+  const reasonParts = [];
+  if (hasException) reasonParts.push("Exception signal");
+  if (last?.MilestoneCode) reasonParts.push(`Last milestone: ${last.MilestoneCode}`);
+  if (sorted.length === 0) reasonParts.push("No events");
+
+  return {
+    plannedEta: plannedEtaIso,
+    predictedEta: new Date(predictedMs).toISOString(),
+    delayHours,
+    isRunningLate,
+    reason: reasonParts.join(" | ") || "Computed from planned vs updated ETA",
+    thresholdHours,
+    mode: shipmentMode,
+  };
+}
+
+async function shipmentPipelineGraph(intent) {
+  const cache = intent && typeof intent === "object" && intent.__cache ? intent.__cache : {};
+
+  const orderNumber =
+    String(intent.key?.OrderNumber || "").trim() ||
+    String(intent.key?.orderNumber || "").trim() ||
+    detectOrderNumberFromText(intent.query);
+
+  if (!orderNumber) {
+    return {
+      success: false,
+      action: "shipment",
+      table: "shipments",
+      result: "Provide an order number to track (example: track shipment for order 6600000680).",
+    };
+  }
+
+  const [ordersData, shipmentTables] = await Promise.all([
+    getTableData("orders", cache),
+    getShipmentTables(cache),
+  ]);
+
+  const order = ordersData.rows.find((row) => normalizeValue(row.OrderNumber) === normalizeValue(orderNumber)) || null;
+  const { shipmentsData, shipmentEventsData } = shipmentTables;
+
+  if (!shipmentsData) {
+    return {
+      success: false,
+      action: "shipment",
+      table: "shipments",
+      result: "Shipment tracking tables are not configured in the workbook yet. Add Shipments + ShipmentEvents tables (see EXCEL_SHIPMENT_TABLES.md).",
+      order: order ? { ...order, __index: undefined, __values: undefined } : null,
+      missingTables: [getTableName("shipments"), getTableName("shipmentevents")],
+    };
+  }
+
+  const pipeline = buildShipmentPipelineForOrder({
+    orderNumber,
+    order,
+    shipmentsData,
+    shipmentEventsData,
+  });
+
+  if (pipeline && pipeline.shipments && pipeline.shipments.length === 0) {
+    return {
+      success: true,
+      action: "shipment",
+      table: "shipments",
+      result: `No shipments found for order ${orderNumber}. Add rows to the Shipments table.`,
+      order: stripRowMeta(order),
+      shipmentPipeline: pipeline,
+    };
+  }
+
+  const prediction = pipeline?.prediction || {};
+  const resultSummary = prediction.isRunningLate
+    ? `Shipment for order ${orderNumber} is running late (+${prediction.delayHours}h vs plan).`
+    : `Shipment status for order ${orderNumber} is on track.`;
+
+  return {
+    success: true,
+    action: "shipment",
+    table: "shipments",
+    result: resultSummary,
+    order: stripRowMeta(order),
+    shipmentPipeline: pipeline,
+  };
 }
 
 async function lookupGraph(intent) {
@@ -512,9 +951,12 @@ async function lookupGraph(intent) {
     return { success: true, action: "lookup", table: "orders", result: "No matching order found.", data: [] };
   }
 
-  const linesData = await getTableData("orderlines", cache);
-  const customerData = await getTableData("customers", cache);
-  const productData = await getTableData("products", cache);
+  const [{ shipmentsData, shipmentEventsData }, linesData, customerData, productData] = await Promise.all([
+    getShipmentTables(cache),
+    getTableData("orderlines", cache),
+    getTableData("customers", cache),
+    getTableData("products", cache),
+  ]);
 
   const lines = linesData.rows.filter((line) => normalizeValue(line.OrderNumber) === normalizeValue(order.OrderNumber));
   const customer = customerData.rows.find((c) =>
@@ -525,23 +967,23 @@ async function lookupGraph(intent) {
   const skuSet = new Set(lines.map((l) => normalizeValue(l.SKU)).filter(Boolean));
   const products = productData.rows.filter((p) => skuSet.has(normalizeValue(p.SKU)));
 
-  const stripMeta = (row) => {
-    if (!row) return row;
-    const copy = { ...row };
-    delete copy.__index;
-    delete copy.__values;
-    return copy;
-  };
+  const shipmentPipeline = buildShipmentPipelineForOrder({
+    orderNumber: order.OrderNumber,
+    order,
+    shipmentsData,
+    shipmentEventsData,
+  });
 
   return {
     success: true,
     action: "lookup",
     table: "orders",
     result: toSummary(order),
-    order: stripMeta(order),
-    customer: stripMeta(customer),
-    lines: lines.map(stripMeta),
-    products: products.map(stripMeta),
+    order: stripRowMeta(order),
+    customer: stripRowMeta(customer),
+    lines: lines.map(stripRowMeta),
+    products: products.map(stripRowMeta),
+    shipmentPipeline,
   };
 }
 
@@ -663,6 +1105,7 @@ function buildCustomerEmailMessage(notifyContext) {
   const customer = notifyContext.customer || {};
   const notify = notifyContext.notify || {};
   const lines = Array.isArray(notifyContext.lines) ? notifyContext.lines : [];
+  const shipmentPipeline = notifyContext.shipmentPipeline || null;
 
   const customerName = customer.CustomerName || order.SoldToName || "Customer";
   const orderNumber = order.OrderNumber || notify.orderNumber || "your order";
@@ -693,6 +1136,89 @@ function buildCustomerEmailMessage(notifyContext) {
   const highlightText = status
     ? `Current status: <strong>${escapeHtml(status)}</strong>`
     : "Your order has been updated.";
+
+  const shipmentSection = shipmentPipeline
+    ? (() => {
+        const prediction = shipmentPipeline.prediction || {};
+        const last = shipmentPipeline.lastMilestone || {};
+        const planned = prediction.plannedEta ? new Date(prediction.plannedEta).toLocaleString() : "";
+        const predicted = prediction.predictedEta ? new Date(prediction.predictedEta).toLocaleString() : "";
+        const delay = Number.isFinite(prediction.delayHours) ? `${prediction.delayHours}h` : "";
+        const lateFlag = prediction.isRunningLate ? "YES" : "NO";
+
+        const shipments = Array.isArray(shipmentPipeline.shipments) ? shipmentPipeline.shipments : [];
+        const events = Array.isArray(shipmentPipeline.events) ? shipmentPipeline.events : [];
+        const topShipments = shipments.slice(0, 3);
+        const recentEvents = events.slice(-6);
+
+        const shipmentsHtml = topShipments.length > 0
+          ? `
+            <h4 style="margin:0 0 6px 0;font-size:13px;color:#111827;">Shipments</h4>
+            <ul style="margin:0 0 12px 18px;padding:0;font-size:13px;">
+              ${topShipments.map((s) => {
+                const carrier = escapeHtml(s.Carrier || "");
+                const tracking = escapeHtml(s.TrackingNumber || "");
+                const mode = escapeHtml(s.Mode || "");
+                const plannedDel = escapeHtml(s.PlannedDeliveryDate || "");
+                const label = [carrier, tracking ? `(${tracking})` : "", mode ? `mode=${mode}` : "", plannedDel ? `planned=${plannedDel}` : ""]
+                  .filter(Boolean)
+                  .join(" ");
+                return `<li style="margin:0 0 4px 0;">${label || "Shipment"}</li>`;
+              }).join("")}
+            </ul>
+          `
+          : "";
+
+        const eventsHtml = recentEvents.length > 0
+          ? `
+            <h4 style="margin:0 0 6px 0;font-size:13px;color:#111827;">Recent events</h4>
+            <ul style="margin:0 0 12px 18px;padding:0;font-size:13px;">
+              ${recentEvents.map((e) => {
+                const at = escapeHtml(e.EventTime || "");
+                const code = escapeHtml(e.MilestoneCode || e.EventCode || "");
+                const desc = escapeHtml(e.EventDescription || "");
+                const loc = escapeHtml(e.Location || "");
+                const pieces = [at, code, desc, loc ? `(${loc})` : ""].filter(Boolean);
+                return `<li style="margin:0 0 4px 0;">${pieces.join(" ")}</li>`;
+              }).join("")}
+            </ul>
+          `
+          : "";
+
+        return `
+          <h3 style="margin:0 0 8px 0;font-size:14px;color:#111827;">Shipment Tracking</h3>
+          <table role="presentation" style="border-collapse:collapse;width:100%;max-width:920px;border:1px solid #d1d5db;margin:0 0 16px 0;">
+            <tr>
+              <th style="text-align:left;background:#f3f4f6;border-right:1px solid #d1d5db;padding:10px 12px;font-size:12px;letter-spacing:.06em;color:#374151;">FIELD</th>
+              <th style="text-align:left;background:#f3f4f6;padding:10px 12px;font-size:12px;letter-spacing:.06em;color:#374151;">VALUE</th>
+            </tr>
+            <tr>
+              <td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:12px;">LAST MILESTONE</td>
+              <td style="padding:10px 12px;border-top:1px solid #e5e7eb;font-size:12px;">${escapeHtml(last.code || "N/A")} ${last.at ? `(${escapeHtml(last.at)})` : ""}</td>
+            </tr>
+            <tr>
+              <td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:12px;">RUNNING LATE</td>
+              <td style="padding:10px 12px;border-top:1px solid #e5e7eb;font-size:12px;">${escapeHtml(lateFlag)}${prediction.isRunningLate && delay ? ` (delay ${escapeHtml(delay)})` : ""}</td>
+            </tr>
+            ${planned ? `
+              <tr>
+                <td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:12px;">PLANNED DELIVERY</td>
+                <td style="padding:10px 12px;border-top:1px solid #e5e7eb;font-size:12px;">${escapeHtml(planned)}</td>
+              </tr>
+            ` : ""}
+            ${predicted ? `
+              <tr>
+                <td style="padding:10px 12px;border-top:1px solid #e5e7eb;color:#6b7280;font-size:12px;">PREDICTED DELIVERY</td>
+                <td style="padding:10px 12px;border-top:1px solid #e5e7eb;font-size:12px;">${escapeHtml(predicted)}</td>
+              </tr>
+            ` : ""}
+          </table>
+
+          ${shipmentsHtml}
+          ${eventsHtml}
+        `;
+      })()
+    : "";
 
   const supportEmail = String(process.env.SUPPORT_EMAIL || "").trim();
   const supportPhone = String(process.env.SUPPORT_PHONE || "").trim();
@@ -738,6 +1264,8 @@ function buildCustomerEmailMessage(notifyContext) {
       <div style="margin:0 0 16px 0;padding:12px 14px;border-left:4px solid #16a34a;background:#ecfdf5;color:#065f46;font-size:13px;">
         ${highlightText}
       </div>
+
+      ${shipmentSection}
 
       ${itemsList ? `
         <h3 style="margin:0 0 8px 0;font-size:14px;color:#111827;">Items</h3>
@@ -994,9 +1522,12 @@ async function sendCustomerMail(toAddress, subject, bodyHtml) {
 async function notifyCustomerGraph(intent) {
   const notify = intent.notify || {};
   const cache = {};
-  const ordersData = await getTableData("orders", cache);
-  const customersData = await getTableData("customers", cache);
-  const linesData = await getTableData("orderlines", cache);
+  const [ordersData, customersData, linesData, shipmentTables] = await Promise.all([
+    getTableData("orders", cache),
+    getTableData("customers", cache),
+    getTableData("orderlines", cache),
+    getShipmentTables(cache),
+  ]);
 
   let order = null;
   let customer = null;
@@ -1048,16 +1579,19 @@ async function notifyCustomerGraph(intent) {
     };
   }
 
-  const message = buildCustomerEmailMessage({ notify, order, customer, lines });
+  const shipmentPipeline = order
+    ? buildShipmentPipelineForOrder({
+        orderNumber: order.OrderNumber,
+        order,
+        shipmentsData: shipmentTables.shipmentsData,
+        shipmentEventsData: shipmentTables.shipmentEventsData,
+      })
+    : null;
+
+  const message = buildCustomerEmailMessage({ notify, order, customer, lines, shipmentPipeline });
   const sendResult = await sendCustomerMail(recipient, message.subject, message.body);
 
-  const clean = (row) => {
-    if (!row) return null;
-    const copy = { ...row };
-    delete copy.__index;
-    delete copy.__values;
-    return copy;
-  };
+  const clean = stripRowMeta;
 
   return {
     success: true,
@@ -1076,6 +1610,10 @@ async function notifyCustomerGraph(intent) {
 }
 
 async function handleGraphIntent(intent) {
+  if (intent.action === "shipment") {
+    return shipmentPipelineGraph(intent);
+  }
+
   if (intent.action === "notify") {
     return notifyCustomerGraph(intent);
   }
@@ -1141,6 +1679,11 @@ app.post("/api/chat-proxy", async (req, res) => {
   if (!input) {
     res.status(400).json({ result: "Input is required." });
     return;
+  }
+
+  const demoDelayMs = getDemoDelayMs();
+  if (demoDelayMs > 0) {
+    await sleepMs(demoDelayMs);
   }
 
   const intent = parseAgentIntent(input);
@@ -1261,4 +1804,6 @@ app.get("/health", (_req, res) => {
 const port = Number(process.env.PORT || 8080);
 app.listen(port, () => {
   console.log(`Proxy listening on ${port}`);
+  // Fire-and-forget warmup so demo lookups are fast even on the first request.
+  warmGraphWorkbookCache();
 });

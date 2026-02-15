@@ -4,7 +4,8 @@
   "private": true,
   "main": "src/server.js",
   "scripts": {
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "provision:shipments": "node scripts/provision-shipment-tables.js"
   },
   "dependencies": {
     "express": "^4.21.1"

@@ -4,6 +4,8 @@
     <external-service-usage enabled="false">
     </external-service-usage>
     <property name="CopilotApiKey" display-name-key="PCFCopilot_ApiKey_DisplayName" description-key="PCFCopilot_ApiKey_Description" of-type="SingleLine.Text" usage="input" required="false" />
+    <property name="ProxyUrl" display-name-key="PCFCopilot_ProxyUrl_DisplayName" description-key="PCFCopilot_ProxyUrl_Description" of-type="SingleLine.Text" usage="input" required="false" />
+    <property name="ProxyKey" display-name-key="PCFCopilot_ProxyKey_DisplayName" description-key="PCFCopilot_ProxyKey_Description" of-type="SingleLine.Text" usage="input" required="false" />
     <resources>
       <code path="src/index.ts" order="1"/>
     </resources>
