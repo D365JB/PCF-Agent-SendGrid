@@ -26,6 +26,59 @@ function requiredEnv(name) {
   return value;
 }
 
+const REQUIRED_GRAPH_AUTH_ENV = ["GRAPH_TENANT_ID", "GRAPH_CLIENT_ID", "GRAPH_CLIENT_SECRET"];
+
+function getMissingEnvVars(names) {
+  return (Array.isArray(names) ? names : [])
+    .map((n) => String(n))
+    .filter((n) => n)
+    .filter((n) => !optionalEnvRaw(n));
+}
+
+function printProvisionHelp({ missingAuth, missingWorkbook } = {}) {
+  const missingAuthList = Array.isArray(missingAuth) ? missingAuth : [];
+  const missingWorkbookList = Array.isArray(missingWorkbook) ? missingWorkbook : [];
+
+  console.error("\nProvisioning setup required:\n");
+
+  if (missingAuthList.length > 0) {
+    console.error("Missing Graph auth env vars:");
+    for (const name of missingAuthList) console.error(`- ${name}`);
+    console.error("");
+  }
+
+  if (missingWorkbookList.length > 0) {
+    console.error("Missing workbook identifier env vars:");
+    for (const name of missingWorkbookList) console.error(`- ${name}`);
+    console.error("");
+  }
+
+  console.error("You must provide ONE of these workbook identifier options:\n");
+  console.error("Option A (direct IDs):");
+  console.error("- GRAPH_DRIVE_ID");
+  console.error("- GRAPH_ITEM_ID\n");
+  console.error("Option B (sharing link):");
+  console.error("- SHARE_URL\n");
+
+  console.error("Quick example (PowerShell):");
+  console.error(
+    "$env:GRAPH_TENANT_ID='<tenant-guid>'\n" +
+      "$env:GRAPH_CLIENT_ID='<app-client-id>'\n" +
+      "$env:GRAPH_CLIENT_SECRET='<app-secret>'\n" +
+      "$env:SHARE_URL='<share link to the workbook>'\n" +
+      "npm run provision:shipments\n",
+  );
+}
+
+function ensureFetchAvailable() {
+  if (typeof fetch === "function") return;
+  const err = new Error(
+    "Global fetch() is not available. Use Node.js 18+ (recommended) to run this provisioning script.",
+  );
+  err.code = "FETCH_UNAVAILABLE";
+  throw err;
+}
+
 function optionalEnv(name, defaultValue) {
   const value = String(process.env[name] || "").trim();
   return value || defaultValue;
@@ -382,9 +435,19 @@ async function provisionTable({ token, driveId, itemId, tableName, worksheetName
 }
 
 async function main() {
+  ensureFetchAvailable();
+
   const shareUrl = optionalEnvRaw("SHARE_URL");
   const configuredDrive = optionalEnvRaw("GRAPH_DRIVE_ID");
   const configuredItem = optionalEnvRaw("GRAPH_ITEM_ID");
+
+  const missingAuth = getMissingEnvVars(REQUIRED_GRAPH_AUTH_ENV);
+  if (missingAuth.length > 0) {
+    const err = new Error("Missing required Graph auth configuration.");
+    err.code = "MISSING_AUTH_ENV";
+    err.missingAuth = missingAuth;
+    throw err;
+  }
 
   const shipmentsTable = optionalEnv("GRAPH_TABLE_SHIPMENTS", "Shipments");
   const eventsTable = optionalEnv("GRAPH_TABLE_SHIPMENTEVENTS", "ShipmentEvents");
@@ -405,7 +468,11 @@ async function main() {
   }
 
   if (!driveId || !itemId) {
-    throw new Error("Missing workbook identifiers. Set GRAPH_DRIVE_ID and GRAPH_ITEM_ID, or provide SHARE_URL.");
+    const missingWorkbook = getMissingEnvVars(["GRAPH_DRIVE_ID", "GRAPH_ITEM_ID"]);
+    const err = new Error("Missing workbook identifiers.");
+    err.code = "MISSING_WORKBOOK";
+    err.missingWorkbook = missingWorkbook;
+    throw err;
   }
 
   await provisionTable({
@@ -432,6 +499,16 @@ async function main() {
 }
 
 main().catch((err) => {
+  if (err && (err.code === "MISSING_AUTH_ENV" || err.code === "MISSING_WORKBOOK")) {
+    printProvisionHelp({ missingAuth: err.missingAuth, missingWorkbook: err.missingWorkbook });
+    process.exit(1);
+  }
+
+  if (err && err.code === "FETCH_UNAVAILABLE") {
+    console.error(`\n${err.message}\n`);
+    process.exit(1);
+  }
+
   console.error(String(err && err.stack ? err.stack : err));
   process.exit(1);
 });
