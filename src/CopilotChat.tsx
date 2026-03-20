@@ -1,6 +1,8 @@
 
 import * as React from "react";
 
+const MILLIKEN_LOGO_URL = "https://www.cornerstonebuildingbrands.com/wp-content/uploads/2023/06/CBBLogo.png";
+
 export interface CopilotChatProps {
   value: string;
   onSend: (message: string) => void;
@@ -34,6 +36,13 @@ export const CopilotChat: React.FC<CopilotChatProps> = ({ value, onSend, message
       maxWidth: 400,
       margin: "auto"
     }}>
+      <div style={{ display: "flex", justifyContent: "center", marginBottom: 12 }}>
+        <img
+          src={MILLIKEN_LOGO_URL}
+          alt="Cornerstone Building Brands"
+          style={{ height: 28, width: "auto", display: "block" }}
+        />
+      </div>
       {Array.isArray(pipelineSteps) && pipelineSteps.length > 0 && (
         <div style={{
           marginBottom: 12,
