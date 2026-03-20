@@ -827,8 +827,8 @@ export class CopilotAgentUI extends React.Component<CopilotAgentUIProps, Copilot
           </div>
           <div style={logoContainerStyle}>
             <img
-              src="https://www.cornerstonebuildingbrands.com/wp-content/uploads/2023/06/CBBLogo.png"
-              alt="Cornerstone Building Brands"
+              src="https://www.milliken.com/-/media/milliken/footer-v2/milliken-logo-footer.svg"
+              alt="Milliken"
               style={logoStyle}
             />
           </div>
