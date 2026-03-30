@@ -828,7 +828,7 @@ export class CopilotAgentUI extends React.Component<CopilotAgentUIProps, Copilot
           <div style={logoContainerStyle}>
             <img
               src="https://www.milliken.com/-/media/milliken/footer-v2/milliken-logo-footer.svg"
-              alt="Milliken"
+              alt="Milliken & Company"
               style={logoStyle}
             />
           </div>
